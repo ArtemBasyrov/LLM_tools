@@ -19,10 +19,25 @@ import json
 import os
 import uuid
 
+import logging
+
 import lancedb
 import pyarrow as pa
 from sentence_transformers import SentenceTransformer
 from tools import register
+
+# Suppress noisy HuggingFace startup output (unauthenticated warning, load
+# report, and weight-loading progress bar) — all harmless for local use.
+logging.getLogger("huggingface_hub").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+try:
+    import transformers as _transformers
+
+    _transformers.logging.set_verbosity_error()
+    _transformers.logging.disable_progress_bar()
+except Exception:
+    pass
 
 # ---------------------------------------------------------------------------
 # Config
@@ -45,7 +60,10 @@ _table = None  # lancedb.Table
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
-        _model = SentenceTransformer(_MODEL_NAME)
+        _model = SentenceTransformer(
+            _MODEL_NAME,
+            cache_folder=os.path.join(_DATA_DIR, "models"),
+        )
     return _model
 
 

@@ -1,10 +1,12 @@
 """
-File write and edit tools.
+File write, edit, and JSON tools.
 
 write_file — create or overwrite a file with given content
-edit_file   — replace an exact string in a file (targeted edit)
+edit_file  — replace an exact string in a file (targeted edit)
+read_json  — parse a JSON file and return structured data
+write_json — validate, format, and write JSON to a file
 
-Both tools show a diff and ask for user confirmation before making changes.
+Both write_file and write_json show a diff and ask for user confirmation.
 """
 
 import difflib
@@ -229,6 +231,118 @@ def edit_file(path: str, old_string: str, new_string: str) -> str:
     try:
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(updated)
+    except OSError as e:
+        return json.dumps({"error": str(e)})
+
+    return json.dumps({"success": True, "path": path})
+
+
+# ---------------------------------------------------------------------------
+# JSON tools
+# ---------------------------------------------------------------------------
+
+
+@register(
+    description=(
+        "Read and parse a JSON file, returning its contents as structured data. "
+        "Optionally extract a nested value using a dot-separated key path "
+        "(e.g. 'users.0.name' to get the name of the first user). "
+        "Prefer this over read_file when you need to inspect or query JSON data."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Absolute or relative path to the JSON file.",
+            },
+            "key_path": {
+                "type": "string",
+                "description": (
+                    "Dot-separated path to extract a nested value, e.g. 'a.b.c' or 'items.0'. "
+                    "Omit to return the entire document."
+                ),
+            },
+        },
+        "required": ["path"],
+    },
+)
+def read_json(path: str, key_path: str | None = None) -> str:
+    path = os.path.expanduser(path)
+    if not os.path.exists(path):
+        return json.dumps({"error": f"File not found: {path}"})
+    if not os.path.isfile(path):
+        return json.dumps({"error": f"Path is not a file: {path}"})
+
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            raw = fh.read(_MAX_BYTES)
+            truncated = fh.read(1) != ""
+    except OSError as e:
+        return json.dumps({"error": str(e)})
+
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid JSON: {e}"})
+
+    if key_path:
+        try:
+            for key in key_path.split("."):
+                if isinstance(data, list):
+                    data = data[int(key)]
+                else:
+                    data = data[key]
+        except (KeyError, IndexError, ValueError, TypeError) as e:
+            return json.dumps({"error": f"Key path '{key_path}' not found: {e}"})
+
+    result: dict = {"path": path, "data": data}
+    if truncated:
+        result["warning"] = (
+            f"File truncated at {_MAX_BYTES} bytes — JSON may be incomplete."
+        )
+    return json.dumps(result, ensure_ascii=False)
+
+
+@register(
+    description=(
+        "Write a JSON value to a file with consistent formatting (2-space indent). "
+        "Validates that the content is valid JSON before writing. "
+        "Use this instead of write_file when the output must be well-formed JSON."
+    ),
+    parameters={
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Absolute or relative path to the JSON file.",
+            },
+            "content": {
+                "type": "string",
+                "description": "The JSON content to write (as a JSON-encoded string).",
+            },
+        },
+        "required": ["path", "content"],
+    },
+)
+def write_json(path: str, content: str) -> str:
+    path = os.path.expanduser(path)
+
+    try:
+        data = json.loads(content)
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid JSON content: {e}"})
+
+    formatted = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    _show_write_diff(path, formatted)
+
+    if not _confirm(f"Allow write_json → {path}?"):
+        return json.dumps({"error": "User denied write_json — no changes made."})
+
+    try:
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(formatted)
     except OSError as e:
         return json.dumps({"error": str(e)})
 
