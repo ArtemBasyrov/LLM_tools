@@ -33,12 +33,16 @@ micromamba activate llm_tools
 
 # Install dependencies
 micromamba install -n llm_tools ollama lancedb sentence-transformers pyarrow -y
+
+# NotebookLM integration (optional)
+pip install notebooklm-py
+notebooklm login   # one-time Google auth
 ```
 
 ### Running
 
 ```bash
-micromamba run -n llm_tools python chat.py
+micromamba run -n llm_tools python main.py
 ```
 
 The model will automatically download if not present. You'll see a prompt-ready interface with:
@@ -56,7 +60,7 @@ The model will automatically download if not present. You'll see a prompt-ready 
 | **Web** | `web_search`, `read_file`, `file_info`, `search_file`, `read_pdf`, `fetch_url`, `read_url` | Search, file reading with chunking, URL fetching |
 | **Filesystem** | `list_directory`, `get_working_context`, `make_directory`, `remove_file` | Directory navigation and manipulation |
 | **Memory** | `memory_save`, `memory_search`, `memory_list`, `memory_delete` | Persistent semantic memory with vector embeddings |
-| **NotebookLM** | `notebooklm_create_notebook`, `notebooklm_add_source`, `notebooklm_ask`, `notebooklm_generate`, `notebooklm_list_artifacts`, `notebooklm_download` | Google NotebookLM integration |
+| **NotebookLM** | `notebooklm_create_notebook`, `notebooklm_add_source`, `notebooklm_ask`, `notebooklm_generate`, `notebooklm_list_artifacts`, `notebooklm_download` | Google NotebookLM integration via [notebooklm-py](https://github.com/teng-lin/notebooklm-py) |
 
 ## How It Works
 
@@ -79,7 +83,7 @@ def my_tool(param: str) -> str:
     return f"Processed: {param}"
 ```
 
-Register by importing the module, then include it in `chat.py`:
+Register by importing the module, then include it in `main.py`:
 ```python
 import tools.my_tools  # noqa: F401
 ```
@@ -103,7 +107,10 @@ Persistent memory uses **LanceDB** + **all-MiniLM-L6-v2** embeddings:
 
 ```
 llm_tools/
-├── chat.py              # Main chat loop and Ollama integration
+├── main.py               # Main chat loop and Ollama integration
+├── system_prompt.py      # System prompt and model configuration
+├── rendering.py          # Display and formatting helpers
+├── context_window.py     # Context window management
 ├── tools/
 │   ├── __init__.py    # Tool registry system
 │   ├── builtins.py    # Basic utilities
@@ -138,7 +145,7 @@ The system supports models with 32K+ context windows.
 
 1. Create a new module in `tools/` (e.g., `tools/my_tools.py`)
 2. Decorate functions with `@register(description=..., parameters=...)`
-3. Import the module in `chat.py`:
+3. Import the module in `main.py`:
    ```python
    import tools.my_tools  # noqa: F401
    ```
@@ -174,7 +181,7 @@ Manual testing via the chat interface. Key scenarios:
 1. **Ollama dependency** — requires local Ollama instance running
 2. **Model size** — optimized for 35B+ parameter models (smaller models may struggle with tool selection)
 3. **Network calls** — `fetch_url` requires internet access
-4. **NotebookLM API** — Google-specific rate limits may apply
+4. **NotebookLM** — requires [notebooklm-py](https://github.com/teng-lin/notebooklm-py) and a one-time `notebooklm login`; Google-specific rate limits may apply
 5. **Embedding model** — downloads `all-MiniLM-L6-v2` on first memory use (~22 MB)
 
 ## Security Considerations

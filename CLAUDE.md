@@ -31,6 +31,26 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 - Ollama Python SDK or direct HTTP calls to `http://localhost:11434/api/chat`
 - Tools implemented as plain Python functions with schema definitions alongside them
 
+## Project Structure
+
+```
+llm_tools/
+├── main.py               # Main chat loop and Ollama integration
+├── system_prompt.py      # System prompt and model configuration
+├── rendering.py          # Display and formatting helpers
+├── context_window.py     # Context window management
+├── tools/
+│   ├── __init__.py    # Tool registry system
+│   ├── builtins.py    # Basic utilities
+│   ├── files.py       # File manipulation tools
+│   ├── filesystem.py  # Directory operations
+│   ├── memory.py      # Semantic memory (LanceDB + embeddings)
+│   ├── web.py         # Web search + file reading
+│   └── notebooklm.py  # Google NotebookLM integration
+├── CLAUDE.md          # Internal documentation for LLM
+└── README.md          # This file
+```
+
 ## Tool Modules
 
 | Module | Tools | Description |
@@ -40,7 +60,7 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 | `tools/web.py` | `web_search`, `read_file`, `file_info`, `search_file`, `fetch_url`, `read_url` | DuckDuckGo search, file reading, URL fetching with chunking |
 | `tools/filesystem.py` | `list_directory`, `get_working_context`, `make_directory`, `remove_file` | Directory listing, context, folder creation, deletion |
 | `tools/memory.py` | `memory_save`, `memory_search`, `memory_list`, `memory_delete` | Persistent semantic memory |
-| `tools/notebooklm.py` | `notebooklm_*` | Google NotebookLM integration |
+| `tools/notebooklm.py` | `notebooklm_*` | Google NotebookLM integration via [notebooklm-py](https://github.com/teng-lin/notebooklm-py) |
 
 ## Semantic Memory
 
@@ -55,4 +75,4 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 
 1. Create or edit a module in `tools/`
 2. Decorate each function with `@register(description=..., parameters=...)`
-3. Import the module in `chat.py` with a `# noqa: F401` comment
+3. Import the module in `main.py` with a `# noqa: F401` comment
