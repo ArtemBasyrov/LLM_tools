@@ -3,12 +3,37 @@ Tool-calling chat loop for a local Ollama model.
 
 Run:
     micromamba run -n internet python chat.py
+
+Configuration via environment variables (or a .env file in the project root):
+    OLLAMA_MODEL  — model name to use (default: qwen3.5:35b)
+    OLLAMA_HOST   — Ollama server URL (default: http://localhost:11434)
+    LLM_MEMORY_DIR — custom directory for the semantic memory database
 """
 
+import os
 import shutil
 import sys
 import textwrap
 import time
+
+
+def _load_dotenv(path: str = ".env") -> None:
+    """Load KEY=VALUE pairs from *path* into os.environ (existing vars are not overwritten)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for raw in fh:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                # Strip optional surrounding quotes
+                value = value.strip().strip("\"'")
+                os.environ.setdefault(key.strip(), value)
+    except FileNotFoundError:
+        pass
+
+
+_load_dotenv()
 
 import ollama
 import tools.builtins  # noqa: F401  — registers built-in tools
@@ -19,7 +44,7 @@ import tools.notebooklm  # noqa: F401  — registers notebooklm_* tools
 import tools.web  # noqa: F401  — registers web_search, read_file, file_info, search_file, read_pdf, fetch_url, read_url
 from tools import call, schemas
 
-MODEL = "qwen3.5:35b"
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:35b")
 
 _SYSTEM_PROMPT = (
     "You are a helpful assistant with access to tools. "

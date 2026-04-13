@@ -118,18 +118,19 @@ llm_tools/
 
 ## Configuration
 
+Copy `.env.example` to `.env` and edit as needed — the file is gitignored and never committed:
+
+```bash
+cp .env.example .env
+```
+
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
+| `OLLAMA_MODEL` | `qwen3.5:35b` | Ollama model to use (must be pulled locally) |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
 | `LLM_MEMORY_DIR` | `~/.llm_memory` | Custom location for semantic memory database |
-
-### Model Configuration
-
-Edit `chat.py` to change the model:
-```python
-MODEL = "qwen3.5:35b"  # Change to any Ollama model
-```
 
 The system supports models with 32K+ context windows.
 
@@ -178,14 +179,10 @@ Manual testing via the chat interface. Key scenarios:
 
 ## Security Considerations
 
-Before publishing publicly:
-- Review all file paths for potential injection
-- Audit third-party API keys (if any)
-- Check dependencies for vulnerabilities (`pip audit` or `safety`)
-- Remove any hardcoded credentials or API keys
-- Consider rate limiting for file operations in production use
-- Add input validation for user-provided paths
-- Implement path sanitization to prevent directory traversal
+- No API keys are required — all tools use local resources or key-free APIs (DuckDuckGo)
+- Sensitive config (model name, host) lives in `.env`, which is gitignored
+- File write/delete operations require explicit user confirmation at runtime
+- The `calculate` tool only allows basic arithmetic characters
 
 ## License
 

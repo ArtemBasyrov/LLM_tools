@@ -4,8 +4,9 @@ This project builds tools for a locally running LLM to use via function/tool cal
 
 ## Target Model
 
-- **Model**: qwen3.5:35b (running locally via [Ollama](https://ollama.com))
-- **Interface**: Ollama API (`http://localhost:11434`)
+- **Model**: configured via `OLLAMA_MODEL` env var (default: `qwen3.5:35b`, running locally via [Ollama](https://ollama.com))
+- **Interface**: Ollama API, host configured via `OLLAMA_HOST` env var (default: `http://localhost:11434`)
+- **Config**: copy `.env.example` → `.env` to set model and host
 
 ## Project Goal
 
