@@ -2,10 +2,14 @@
 Context window management for the LLM tool calling interface.
 """
 
+import datetime
 import os
-import ollama
-import sys
 import shutil
+import sys
+import uuid
+from pathlib import Path
+
+import ollama
 
 from system_prompt import MODEL
 
@@ -38,6 +42,13 @@ STYLE_HEADER = _BOLD + _FG_BLUE
 
 _TOOL_RESULT_MAX = 300  # chars shown in tool-result lines
 _CTX_BAR_WIDTH = 24  # characters in the context fill bar
+
+# --- Scratch / offload settings ---
+_SCRATCH_BASE = Path(os.path.expanduser("~/.llm_scratch"))
+_SESSION_ID = uuid.uuid4().hex[:8]
+_SCRATCH_DIR = _SCRATCH_BASE / _SESSION_ID
+_OFFLOAD_THRESHOLD = 8_000  # chars; results longer than this are offloaded to disk
+_SCRATCH_TTL_DAYS = 7  # session dirs older than this are deleted at startup
 
 
 def _term_width() -> int:
@@ -134,3 +145,198 @@ def warmup() -> None:
     except Exception:
         pass
     print(f"\r{' ' * len(msg)}\r", end="", flush=True)
+
+
+# ---------------------------------------------------------------------------
+# Layer 1 — Scratch directory management
+# ---------------------------------------------------------------------------
+
+
+def init_scratch_dir() -> None:
+    """Create this session's scratch directory and purge stale ones (>TTL days)."""
+    _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    _purge_old_scratch_dirs()
+
+
+def _purge_old_scratch_dirs() -> None:
+    """Delete session scratch directories older than _SCRATCH_TTL_DAYS."""
+    if not _SCRATCH_BASE.exists():
+        return
+    cutoff = datetime.datetime.now() - datetime.timedelta(days=_SCRATCH_TTL_DAYS)
+    for entry in _SCRATCH_BASE.iterdir():
+        if entry.is_dir() and entry != _SCRATCH_DIR:
+            try:
+                mtime = datetime.datetime.fromtimestamp(entry.stat().st_mtime)
+                if mtime < cutoff:
+                    shutil.rmtree(entry, ignore_errors=True)
+            except Exception:
+                pass
+
+
+def cleanup_scratch() -> None:
+    """Delete this session's scratch directory on clean exit."""
+    shutil.rmtree(_SCRATCH_DIR, ignore_errors=True)
+
+
+def maybe_offload_result(tool_name: str, result: str) -> str:
+    """
+    If *result* exceeds _OFFLOAD_THRESHOLD chars, write it to a scratch file
+    and return a compact placeholder with a preview. Otherwise return unchanged.
+    """
+    if len(result) <= _OFFLOAD_THRESHOLD:
+        return result
+
+    ts = datetime.datetime.now().strftime("%Y%m%dT%H%M%S")
+    scratch_path = _SCRATCH_DIR / f"{ts}-{tool_name}.txt"
+    _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
+    scratch_path.write_text(result, encoding="utf-8")
+
+    lines = result.splitlines()
+    total_lines = len(lines)
+    head = lines[:10]
+    tail = lines[-5:] if total_lines > 15 else []
+
+    placeholder = (
+        f"[Output offloaded: {total_lines} lines | {len(result):,} chars"
+        f" → {scratch_path}]\n"
+        f"\n=== PREVIEW (first {len(head)} lines) ===\n" + "\n".join(head)
+    )
+    if tail:
+        placeholder += f"\n\n=== TAIL (last {len(tail)} lines) ===\n" + "\n".join(tail)
+    placeholder += (
+        f'\n\nUse read_file("{scratch_path}") to read the full output.'
+        f'\nUse search_file("{scratch_path}", "<pattern>") to locate specific sections.'
+    )
+    return placeholder
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — Staged compaction
+# ---------------------------------------------------------------------------
+
+
+def compact_messages(messages: list, used: int, total: int) -> bool:
+    """
+    Graduated compaction pipeline triggered by context fill %.
+
+    Stage 1 (≥80%): Surgical clearing — replace bulky old tool results with pointers.
+    Stage 2 (≥85%): Fast pruning — drop middle user/assistant messages.
+    Stage 3 (≥92%): LLM summarization — compress history into an episodic block.
+
+    Returns True if any compaction was applied.
+    """
+    if total <= 0 or used <= 0:
+        return False
+    pct = used / total * 100
+    if pct < 80:
+        return False
+
+    compacted = False
+    if pct >= 80:
+        compacted |= _surgical_clear(messages)
+    if pct >= 85:
+        compacted |= _fast_prune(messages)
+    if pct >= 92:
+        compacted |= _llm_compact(messages)
+    return compacted
+
+
+def _surgical_clear(
+    messages: list,
+    keep_recent: int = 8,
+    min_chars: int = 500,
+) -> bool:
+    """Replace bulky tool-result bodies outside the recent tail with a pointer."""
+    cleared = False
+    safe_start = max(1, len(messages) - keep_recent)
+
+    for i, msg in enumerate(messages):
+        if i >= safe_start:
+            continue
+        if msg.get("role") == "tool" and len(msg.get("content", "")) > min_chars:
+            original_len = len(msg["content"])
+            msg["content"] = (
+                f"[Tool result cleared — {original_len:,} chars removed to free context. "
+                "Re-run the tool or use read_file on the scratch path if it was offloaded.]"
+            )
+            cleared = True
+
+    if cleared:
+        print(f"\n{_DIM}  [context: surgical tool-result clearing applied]{_RESET}\n")
+    return cleared
+
+
+def _fast_prune(messages: list, keep_recent: int = 10) -> bool:
+    """Drop middle user/assistant messages, keeping system message + last keep_recent."""
+    if len(messages) <= keep_recent + 1:
+        return False
+    system_msg = messages[0]
+    tail = messages[-keep_recent:]
+    messages[:] = [system_msg] + tail
+    print(
+        f"\n{_DIM}  [context: fast pruning — kept system + last {keep_recent} messages]{_RESET}\n"
+    )
+    return True
+
+
+def _llm_compact(messages: list, keep_recent: int = 6) -> bool:
+    """Use the local model to summarize history into a compact episodic block."""
+    middle = messages[1 : max(1, len(messages) - keep_recent)]
+    if not middle:
+        return False
+
+    history_text = []
+    for msg in middle:
+        role = msg.get("role", "unknown").upper()
+        content = (msg.get("content") or "")[
+            :2_000
+        ]  # cap each msg for the compact call
+        if content:
+            history_text.append(f"[{role}]: {content}")
+
+    if not history_text:
+        return False
+
+    compact_prompt = [
+        {
+            "role": "system",
+            "content": (
+                "You are a context compaction assistant. "
+                "Summarize the conversation history below into a compact Markdown block. "
+                "Include exactly these sections:\n"
+                "## Session Intent\n"
+                "## Key Facts & Decisions\n"
+                "## Pending Work\n"
+                "## Artifact Index (files read/created/modified with full paths)\n\n"
+                "Rules: be terse; preserve exact file paths, function names, and error codes; "
+                "no commentary; output only the Markdown block."
+            ),
+        },
+        {"role": "user", "content": "History:\n\n" + "\n\n".join(history_text)},
+    ]
+
+    try:
+        response = ollama.chat(
+            model=MODEL,
+            messages=compact_prompt,
+            think=False,
+            options={"num_predict": 1024},
+            keep_alive="15m",
+        )
+        summary = (response.message.content or "").strip()
+    except Exception:
+        return False
+
+    if not summary:
+        return False
+
+    system_msg = messages[0]
+    tail = messages[-keep_recent:]
+    compact_block = {
+        "role": "assistant",
+        "content": f"[COMPACTED HISTORY — auto-generated summary]\n\n{summary}",
+        "tool_calls": [],
+    }
+    messages[:] = [system_msg, compact_block] + tail
+    print(f"\n{_DIM}  [context: LLM compaction applied — history summarized]{_RESET}\n")
+    return True

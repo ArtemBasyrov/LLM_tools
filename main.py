@@ -70,6 +70,10 @@ from context_window import (
     trim_messages,
     offload,
     warmup,
+    init_scratch_dir,
+    cleanup_scratch,
+    maybe_offload_result,
+    compact_messages,
 )
 
 
@@ -77,6 +81,7 @@ def chat() -> None:
     # Initialize session
     tools.session._clear_session_file()
     warmup()
+    init_scratch_dir()
     context_window = get_context_window()
     print_header(context_window)
 
@@ -90,6 +95,7 @@ def chat() -> None:
         except (EOFError, KeyboardInterrupt):
             print(f"\n{STYLE_STATS}Bye.{_RESET}")
             offload()
+            cleanup_scratch()
             break
 
         if not user_input:
@@ -97,6 +103,7 @@ def chat() -> None:
         if user_input.lower() in ("exit", "quit"):
             print(f"{STYLE_STATS}Bye.{_RESET}")
             offload()
+            cleanup_scratch()
             break
 
         # Prepend context usage so the LLM knows how full the window is
@@ -113,6 +120,7 @@ def chat() -> None:
         t_start = time.perf_counter()
 
         while True:
+            compact_messages(messages, context_used, context_window)
             stream = ollama.chat(
                 model=MODEL,
                 messages=messages,
@@ -181,7 +189,7 @@ def chat() -> None:
                 print_tool_call(fn_name, fn_args)
 
                 result = call(fn_name, fn_args)
-                result_str = str(result)
+                result_str = maybe_offload_result(fn_name, str(result))
                 print_tool_result(result_str)
 
                 messages.append({"role": "tool", "content": result_str})

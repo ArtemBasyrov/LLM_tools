@@ -138,17 +138,12 @@ def notebooklm_list_sources(notebook_id: str) -> str:
     return json.dumps(_run(["source", "list", "--notebook", notebook_id, "--json"]))
 
 
-_DEFAULT_CHUNK_SIZE = 40000  # characters
-
-
 @register(
     description=(
         "Ask a question about the sources in a NotebookLM notebook (chat). "
         "Returns the answer and citation references. "
         "All sources must have status=ready before calling this. "
-        "Use follow_up=true and pass conversation_id to continue an existing conversation. "
-        "If the response is too large it is split into chunks of chunk_size characters. "
-        "When chunk_total > 1, call again with chunk=1, chunk=2, … to retrieve remaining parts."
+        "Pass conversation_id to continue an existing conversation thread."
     ),
     parameters={
         "type": "object",
@@ -165,14 +160,6 @@ _DEFAULT_CHUNK_SIZE = 40000  # characters
                 "type": "string",
                 "description": "Conversation ID to continue a prior chat thread. Omit to start a new conversation.",
             },
-            "chunk": {
-                "type": "integer",
-                "description": "0-based chunk index to retrieve when a previous call returned chunk_total > 1. Defaults to 0.",
-            },
-            "chunk_size": {
-                "type": "integer",
-                "description": f"Maximum characters per chunk. Defaults to {_DEFAULT_CHUNK_SIZE}.",
-            },
         },
         "required": ["notebook_id", "question"],
     },
@@ -181,24 +168,11 @@ def notebooklm_ask(
     notebook_id: str,
     question: str,
     conversation_id: str | None = None,
-    chunk: int = 0,
-    chunk_size: int = _DEFAULT_CHUNK_SIZE,
 ) -> str:
     args = ["ask", question, "--notebook", notebook_id, "--json"]
     if conversation_id:
         args += ["-c", conversation_id]
-    raw = json.dumps(_run(args))
-    if len(raw) <= chunk_size:
-        return raw
-    chunks = [raw[i : i + chunk_size] for i in range(0, len(raw), chunk_size)]
-    chunk = max(0, min(chunk, len(chunks) - 1))
-    return json.dumps(
-        {
-            "chunk": chunk,
-            "chunk_total": len(chunks),
-            "data": chunks[chunk],
-        }
-    )
+    return json.dumps(_run(args))
 
 
 @register(
