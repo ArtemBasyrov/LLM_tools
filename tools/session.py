@@ -39,12 +39,12 @@ def _clear_session_file() -> None:
 
 @register(
     description=(
-        "Save a session snapshot so context can survive a context-window trim. "
-        "Overwrites any previous snapshot — include everything important. "
-        "Call when <context_window> in the user message shows usage above ~75%, "
-        "or when the current task is complex and must survive a context trim. "
-        "Write in Markdown. Recommended sections: "
-        "## Current Task, ## Key Facts & Decisions, ## Pending Work, ## Outcomes."
+        "CONTEXT-WINDOW MANAGEMENT TOOL. "
+        "Call this — and only this — when the <context_window> tag shows token usage above ~75%. "
+        "Saves a self-contained Markdown summary so the conversation can be trimmed "
+        "without losing task state. Immediately follow with session_recall() to reload the snapshot. "
+        "NOT for persisting general knowledge — use memory_save for that. "
+        "Recommended sections: ## Current Task, ## Key Facts & Decisions, ## Pending Work, ## Outcomes."
     ),
     parameters={
         "type": "object",

@@ -49,6 +49,7 @@ _SESSION_ID = uuid.uuid4().hex[:8]
 _SCRATCH_DIR = _SCRATCH_BASE / _SESSION_ID
 _OFFLOAD_THRESHOLD = 8_000  # chars; results longer than this are offloaded to disk
 _SCRATCH_TTL_DAYS = 7  # session dirs older than this are deleted at startup
+_PREVIEW_LINE_MAX = 300  # chars; preview lines longer than this are truncated
 
 
 def _term_width() -> int:
@@ -178,6 +179,14 @@ def cleanup_scratch() -> None:
     shutil.rmtree(_SCRATCH_DIR, ignore_errors=True)
 
 
+def is_scratch_path(path: str) -> bool:
+    """Return True if *path* points inside the scratch base directory."""
+    try:
+        return Path(os.path.expanduser(path)).is_relative_to(_SCRATCH_BASE)
+    except (ValueError, TypeError):
+        return False
+
+
 def maybe_offload_result(tool_name: str, result: str) -> str:
     """
     If *result* exceeds _OFFLOAD_THRESHOLD chars, write it to a scratch file
@@ -191,22 +200,54 @@ def maybe_offload_result(tool_name: str, result: str) -> str:
     _SCRATCH_DIR.mkdir(parents=True, exist_ok=True)
     scratch_path.write_text(result, encoding="utf-8")
 
+    def _truncate_line(line: str) -> str:
+        if len(line) <= _PREVIEW_LINE_MAX:
+            return line
+        return (
+            line[:_PREVIEW_LINE_MAX]
+            + f"… [{len(line) - _PREVIEW_LINE_MAX} chars truncated]"
+        )
+
     lines = result.splitlines()
     total_lines = len(lines)
-    head = lines[:10]
-    tail = lines[-5:] if total_lines > 15 else []
+    head = [_truncate_line(l) for l in lines[:10]]
+    tail = [_truncate_line(l) for l in lines[-5:]] if total_lines > 15 else []
+
+    # Suggest chunk size that keeps each read well under the offload threshold.
+    # Target ~4 000 chars per chunk; use line count as a proxy (avg ~40 chars/line).
+    _TARGET_CHARS = 4_000
+    avg_chars = len(result) / total_lines if total_lines else 40
+    chunk_lines = max(10, int(_TARGET_CHARS / avg_chars))
+    import math
+
+    chunks_needed = math.ceil(total_lines / chunk_lines)
+
+    # Build concrete read_file call examples
+    read_examples = []
+    for i in range(min(chunks_needed, 3)):
+        sl = i * chunk_lines + 1
+        el = min((i + 1) * chunk_lines, total_lines)
+        read_examples.append(
+            f'  read_file("{scratch_path}", start_line={sl}, end_line={el})'
+        )
+    if chunks_needed > 3:
+        read_examples.append(f"  … {chunks_needed - 3} more chunk(s)")
 
     placeholder = (
         f"[Output offloaded: {total_lines} lines | {len(result):,} chars"
         f" → {scratch_path}]\n"
+        f"\nACTION REQUIRED: Read the scratch file using read_file with start_line/end_line."
+        f"\nDo NOT call read_file without line range — the file is {total_lines} lines and"
+        f" will be offloaded again, creating an infinite loop."
+        f"\nDo NOT re-read the original source — it will just offload again."
+        f"\n\nRead in {chunks_needed} chunk(s) of ~{chunk_lines} lines each:"
+        f"\n"
+        + "\n".join(read_examples)
+        + f'\n\nOr use search_file("{scratch_path}", pattern) to locate specific sections.\n'
         f"\n=== PREVIEW (first {len(head)} lines) ===\n" + "\n".join(head)
     )
     if tail:
         placeholder += f"\n\n=== TAIL (last {len(tail)} lines) ===\n" + "\n".join(tail)
-    placeholder += (
-        f'\n\nUse read_file("{scratch_path}") to read the full output.'
-        f'\nUse search_file("{scratch_path}", "<pattern>") to locate specific sections.'
-    )
     return placeholder
 
 

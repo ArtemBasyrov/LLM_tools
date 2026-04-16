@@ -9,9 +9,11 @@ from tools import register
 @register(
     description=(
         "Return the current local date and time. "
-        "Call this FIRST whenever the user's question involves 'now', 'today', 'current', "
+        "Call this whenever: (1) the user's question involves 'now', 'today', 'current', "
         "'latest', 'recent', or any other time-relative term — before doing a web search — "
-        "so you know exactly what date to anchor the query to."
+        "so you know exactly what date to anchor the query to; "
+        "(2) you are about to write a file that includes a timestamp, date, or version "
+        "number in its name or content."
     )
 )
 def get_current_datetime() -> str:

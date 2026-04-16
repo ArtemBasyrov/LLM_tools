@@ -73,6 +73,7 @@ from context_window import (
     init_scratch_dir,
     cleanup_scratch,
     maybe_offload_result,
+    is_scratch_path,
     compact_messages,
 )
 
@@ -189,7 +190,13 @@ def chat() -> None:
                 print_tool_call(fn_name, fn_args)
 
                 result = call(fn_name, fn_args)
-                result_str = maybe_offload_result(fn_name, str(result))
+                result_str = str(result)
+                # Never offload reads of scratch files — they ARE the offloaded content.
+                # Offloading them again creates an infinite redirect cycle.
+                if not (
+                    fn_name == "read_file" and is_scratch_path(fn_args.get("path", ""))
+                ):
+                    result_str = maybe_offload_result(fn_name, result_str)
                 print_tool_result(result_str)
 
                 messages.append({"role": "tool", "content": result_str})

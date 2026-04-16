@@ -2,12 +2,68 @@
 System prompt and constants for the LLM tool calling interface.
 """
 
+import datetime
 import os
+from pathlib import Path
 import ollama
 
 MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:35b")
 
+# Context files to scan for project/agent instructions
+_CONTEXT_FILES = [
+    "CLAUDE.md",
+    "AGENT.md",
+    "AGENTS.md",
+    ".cursorrules",
+    ".windsurfrules",
+    ".clinerules",
+]
+
+
+def _load_cwd_context() -> str:
+    """
+    Walk from CWD up to filesystem root, collect any agent context files, and
+    return them formatted as a Markdown block ready to append to the system
+    prompt.  Returns an empty string if nothing is found.
+    """
+    start = Path.cwd()
+    dirs: list[Path] = []
+    current = start
+    while True:
+        dirs.append(current)
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+    dirs.reverse()  # outermost first
+
+    sections: list[str] = []
+    for d in dirs:
+        for name in _CONTEXT_FILES:
+            path = d / name
+            if path.is_file():
+                try:
+                    content = path.read_text(encoding="utf-8").strip()
+                    if content:
+                        sections.append(f"### {path}\n\n{content}")
+                except Exception:
+                    pass
+
+    if not sections:
+        return ""
+
+    joined = "\n\n---\n\n".join(sections)
+    return (
+        "\n\n## Project / Directory Context\n\n"
+        "The following files were found in the current working directory (or its "
+        "parents) and contain project-specific instructions. Follow them.\n\n" + joined
+    )
+
+
+_SESSION_START = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
 SYSTEM_PROMPT = (
+    f"Current date and time (session start): {_SESSION_START}\n\n"
     "You are a helpful assistant with access to tools. "
     "You have a persistent semantic memory — use it proactively:\n"
     "- Call memory_search at the start of any conversation that may involve "
@@ -18,20 +74,20 @@ SYSTEM_PROMPT = (
     "(e.g. 'right now', 'today', 'currently', 'latest', 'recent'), "
     "always call get_current_datetime FIRST before any web search, "
     "and include the current date in your query.\n"
-    "- Session memory (session_save / session_recall / session_clear):\n"
-    "  • Every user message is prefixed with a <context_window> tag showing current "
-    "token usage. This is system metadata for your information only — it is NOT part "
-    "of the user's message and must not be repeated or quoted back.\n"
-    "  • Call session_save(content=...) when <context_window> shows usage above ~70%. "
-    "Write a self-contained Markdown summary covering: ## Current Task, "
-    "## Key Facts & Decisions, ## Pending Work, ## Outcomes. "
-    "Immediately after saving, call session_recall() to reload the snapshot — "
-    "the oldest messages will have been trimmed and the snapshot is now your only "
-    "record of prior work.\n"
-    "  • The system automatically compacts conversation history at 80%, 85%, and 92% "
-    "fill. This is a safety net — do not wait for it. session_save at 70% is your "
-    "deliberate, reliable checkpoint.\n"
+    "- Before writing any file whose name or content will include a timestamp, date, "
+    "or time value, ALWAYS call get_current_datetime first (unless the session-start "
+    "time above is recent enough).\n"
+    "- CONTEXT-WINDOW RULE (highest priority — check this every turn):\n"
+    "  • Every user message is prefixed with a <context_window> tag showing token usage. "
+    "This is system metadata — never repeat or quote it back to the user.\n"
+    "  • When <context_window> shows usage ≥70%: call session_save() BEFORE responding. "
+    "session_save is the ONLY correct tool for this — NOT memory_save, NOT write_file. "
+    "Write a self-contained Markdown summary: ## Current Task, ## Key Facts & Decisions, "
+    "## Pending Work, ## Outcomes. Then immediately call session_recall() — "
+    "old messages will have been trimmed and the snapshot is now your only record.\n"
+    "  • The system auto-compacts at 80/85/92% as a safety net. Do not wait for it.\n"
     "  • Call session_clear() when starting a completely new, unrelated task.\n"
+    "  • memory_save is for durable facts across future sessions, NOT for context management.\n"
     "- When a tool result begins with '[Output offloaded:', the full content was "
     "automatically saved to a scratch file to protect the context window. "
     "The result includes the file path and a short preview. "
@@ -57,5 +113,12 @@ SYSTEM_PROMPT = (
     "Then follow the same 'fits_in_one_read' logic:\n"
     "  • fits_in_one_read = true  → call read_url with chunk=1.\n"
     "  • fits_in_one_read = false → call read_url repeatedly with chunk=1, 2, … "
-    "up to 'chunks_needed'. Each response includes 'next_chunk' as a reminder."
+    "up to 'chunks_needed'. Each response includes 'next_chunk' as a reminder.\n"
+    "- When you start working inside a directory you haven't visited before "
+    "(e.g. after cd-ing via bash), call read_context_files(directory=<path>) "
+    "to load any CLAUDE.md / AGENT.md / .cursorrules etc. before taking action. "
+    "Honour any project-specific instructions found there."
 )
+
+# Append any context files found in the current working directory at startup
+SYSTEM_PROMPT += _load_cwd_context()

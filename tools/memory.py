@@ -104,9 +104,10 @@ def _embed(text: str) -> list[float]:
 
 @register(
     description=(
-        "Save a memory so it can be retrieved later by semantic search. "
-        "Use this to persist facts, user preferences, decisions, observations, "
-        "or any information worth remembering across sessions. "
+        "Persist a discrete fact, user preference, decision, or observation "
+        "to long-term semantic memory so it can be retrieved by future sessions. "
+        "Use for durable knowledge (e.g. 'user prefers dark mode', 'project uses Python 3.12'). "
+        "NOT for context-window management — use session_save for that. "
         "Optionally tag the memory for easier filtering. "
         "Returns the ID of the saved memory."
     ),
