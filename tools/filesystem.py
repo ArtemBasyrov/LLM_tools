@@ -29,7 +29,7 @@ def _is_file_writing_command(command: str) -> bool:
     import re
 
     patterns = [
-        r">\s*\S",  # any > redirect (> file or >> file)
+        r">\s*(?!/dev/null\b)\S",  # > redirect, but not to /dev/null
         r"\btee\b",
         r"\bdd\b.*\bof=",
         r"\bsponge\b",
@@ -41,24 +41,110 @@ def _is_dangerous_command(command: str) -> bool:
     """
     Determine if a bash command is potentially dangerous/destructive.
     """
+    import re
+
     dangerous_patterns = [
-        "rm ",
-        "mv ",
-        "cp ",
-        "chmod ",
-        "chown ",
-        "chgrp ",
-        "dd ",
-        "mkfs ",
-        "mount ",
-        "umount ",
-        "truncate ",
-        "find .* -delete",
-        "find .* -exec rm",
+        # File / directory destruction
+        r"\brm\b",
+        r"\bshred\b",
+        r"\btruncate\b",
+        r"\bsrm\b",
+        # File / directory mutation
+        r"\bmv\b",
+        r"\bcp\b",
+        r"\bln\b",
+        r"\brename\b",
+        # Permission / ownership changes
+        r"\bchmod\b",
+        r"\bchown\b",
+        r"\bchgrp\b",
+        r"\bumask\b",
+        # Disk / filesystem
+        r"\bdd\b",
+        r"\bmkfs\b",
+        r"\bfdisk\b",
+        r"\bparted\b",
+        r"\bdiskutil\b",
+        r"\bmount\b",
+        r"\bumount\b",
+        r"\bfsck\b",
+        r"\bformat\b",
+        # Process termination
+        r"\bkill\b",
+        r"\bkillall\b",
+        r"\bpkill\b",
+        r"\bxkill\b",
+        # System power / reboot
+        r"\bshutdown\b",
+        r"\breboot\b",
+        r"\bhalt\b",
+        r"\bpoweroff\b",
+        r"\binit\s+[016]\b",
+        # Privilege escalation
+        r"\bsudo\b",
+        r"\bsu\b\s",
+        r"\bdoas\b",
+        # Network / firewall
+        r"\biptables\b",
+        r"\bip6tables\b",
+        r"\bnftables\b",
+        r"\bpfctl\b",
+        r"\bufw\b",
+        r"\bfirewall-cmd\b",
+        r"\bnc\b\s",
+        r"\bnetcat\b",
+        # User / group management
+        r"\buseradd\b",
+        r"\buserdel\b",
+        r"\busermod\b",
+        r"\bgroupadd\b",
+        r"\bgroupdel\b",
+        r"\bgroupmod\b",
+        r"\bpasswd\b",
+        # Cron / scheduled tasks
+        r"\bcrontab\b",
+        r"\bat\b\s",
+        # Package removal
+        r"\bpip\s+uninstall\b",
+        r"\bpip3\s+uninstall\b",
+        r"\bnpm\s+uninstall\b",
+        r"\byarn\s+remove\b",
+        r"\bbrew\s+uninstall\b",
+        r"\bbrew\s+remove\b",
+        r"\bapt[-\s]get\s+remove\b",
+        r"\bapt[-\s]get\s+purge\b",
+        r"\bapt\s+remove\b",
+        r"\bapt\s+purge\b",
+        r"\byum\s+remove\b",
+        r"\bdnf\s+remove\b",
+        # Destructive git operations
+        r"\bgit\s+reset\b",
+        r"\bgit\s+clean\b",
+        r"\bgit\s+push\s+.*--force\b",
+        r"\bgit\s+push\s+.*-f\b",
+        r"\bgit\s+branch\s+.*-[Dd]\b",
+        r"\bgit\s+tag\s+.*-d\b",
+        r"\bgit\s+stash\s+drop\b",
+        r"\bgit\s+stash\s+clear\b",
+        r"\bgit\s+reflog\s+delete\b",
+        # Shell history
+        r"\bhistory\s+-[cw]\b",
+        # Environment / variable manipulation
+        r"\bunset\b",
+        r"\bexport\b",
+        # xargs piped destructive
+        r"\bxargs\b.*\brm\b",
+        r"\bxargs\b.*\bkill\b",
+        # find with destructive actions
+        r"\bfind\b.*-delete\b",
+        r"\bfind\b.*-exec\b.*\brm\b",
+        # curl / wget writing to disk
+        r"\bcurl\b.*\s-[a-zA-Z]*[oO]\b",
+        r"\bwget\b",
     ]
 
-    command_lower = command.lower().strip()
-    return any(pattern in command_lower for pattern in dangerous_patterns)
+    command_stripped = command.strip()
+    return any(re.search(p, command_stripped) for p in dangerous_patterns)
 
 
 def _confirm_dangerous_command(command: str) -> bool:
@@ -79,11 +165,12 @@ def _confirm_dangerous_command(command: str) -> bool:
 
 @register(
     description=(
-        "Execute a bash command for filesystem operations. "
-        "Use this to list directories, create directories, remove files/directories, "
-        "and perform other filesystem operations. "
-        "For potentially destructive commands (like rm, mv, cp, etc.), "
-        "manual confirmation will be required before execution. "
+        "Execute an arbitrary bash command — filesystem ops, git, grep, process inspection, "
+        "package management, or any shell task. "
+        "Use this whenever a built-in tool does not cover the operation. "
+        "Potentially destructive commands (rm, mv, kill, shutdown, sudo, git reset, "
+        "pip uninstall, iptables, crontab, wget, etc.) require manual user "
+        "confirmation before execution. "
         "IMPORTANT: writing files via bash (>, >>, tee, dd of=, etc.) is BLOCKED — "
         "use write_file or edit_file instead."
     ),

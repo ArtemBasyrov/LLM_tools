@@ -14,14 +14,19 @@ from tools import register
         "so you know exactly what date to anchor the query to; "
         "(2) you are about to write a file that includes a timestamp, date, or version "
         "number in its name or content."
-    )
+    ),
+    always_on=True,
 )
 def get_current_datetime() -> str:
     return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 @register(
-    description="Evaluate a safe arithmetic expression and return the result.",
+    description=(
+        "Evaluate a safe arithmetic expression and return the result. "
+        "Use this for any arithmetic calculation to avoid hallucinating numbers."
+    ),
+    always_on=True,
     parameters={
         "type": "object",
         "properties": {

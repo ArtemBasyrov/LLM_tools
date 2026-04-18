@@ -13,8 +13,9 @@ from tools.file_tools._helpers import confirm, show_write_diff
 @register(
     description=(
         "Write text content to a file, creating it if it does not exist or "
-        "overwriting it if it does. Use this to create new files or completely "
-        "replace an existing file's contents."
+        "overwriting it entirely if it does. "
+        "Use for new files or complete rewrites. "
+        "Use edit_file instead for targeted changes to an existing file."
     ),
     parameters={
         "type": "object",
@@ -51,9 +52,9 @@ def write_file(path: str, content: str) -> str:
 
 @register(
     description=(
-        "Write a JSON value to a file with consistent formatting (2-space indent). "
-        "Validates that the content is valid JSON before writing. "
-        "Use this instead of write_file when the output must be well-formed JSON."
+        "Validate and write a JSON value to a file with consistent formatting (2-space indent). "
+        "Use this instead of write_file when the output must be well-formed JSON — "
+        "it rejects malformed input before touching the file."
     ),
     parameters={
         "type": "object",

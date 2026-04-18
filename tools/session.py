@@ -46,6 +46,7 @@ def _clear_session_file() -> None:
         "NOT for persisting general knowledge — use memory_save for that. "
         "Recommended sections: ## Current Task, ## Key Facts & Decisions, ## Pending Work, ## Outcomes."
     ),
+    always_on=True,
     parameters={
         "type": "object",
         "properties": {
@@ -74,8 +75,9 @@ def session_save(content: str) -> str:
         "Read the current session snapshot to restore task context after a context-window trim. "
         "Call this immediately after session_save — the trim will have removed old messages "
         "and the snapshot is now the only record of prior work. "
-        "Returns the full snapshot text, or a 'not_found' message if none exists yet."
+        "Returns {found: true, content: '...'} on success, or {found: false} if no snapshot exists yet."
     ),
+    always_on=True,
 )
 def session_recall() -> str:
     if not _SESSION_FILE.exists():
@@ -96,6 +98,7 @@ def session_recall() -> str:
         "Erase the current session snapshot. "
         "Use when starting a completely new task where prior context is no longer relevant."
     ),
+    always_on=True,
 )
 def session_clear() -> str:
     if _SESSION_FILE.exists():

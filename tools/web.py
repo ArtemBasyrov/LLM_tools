@@ -35,8 +35,10 @@ _WEB_TIMEOUT = 15
     description=(
         "Search the web using DuckDuckGo and return the top results. "
         "Each result contains a title, URL, and short snippet. "
-        "Use this to find current information or URLs you don't already know."
+        "Use this to find current information or URLs you don't already know. "
+        "If you already have the URL, skip this and call fetch_url or read_url directly."
     ),
+    always_on=True,
     parameters={
         "type": "object",
         "properties": {
@@ -121,7 +123,7 @@ def _fetch_and_extract(url: str) -> tuple[str, str]:
 @register(
     description=(
         "Fetch a URL and return its metadata and a short text preview — without "
-        "returning the full content. Mirrors file_info for web pages. "
+        "returning the full content. Analogous to file_info for web pages. "
         "Always call this before read_url when you don't know how long the page is. "
         "The response includes 'fits_in_one_read' (bool) and, when false, "
         "'chunks_needed' and 'suggested_chunk_size' so you know how many "

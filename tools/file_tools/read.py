@@ -87,6 +87,19 @@ def read_file(
     # json
     key_path: str | None = None,
 ) -> str:
+    if start_line is not None:
+        start_line = int(start_line)
+    if end_line is not None:
+        end_line = int(end_line)
+    if start_char is not None:
+        start_char = int(start_char)
+    if end_char is not None:
+        end_char = int(end_char)
+    if start_page is not None:
+        start_page = int(start_page)
+    if end_page is not None:
+        end_page = int(end_page)
+
     path = os.path.expanduser(path)
     if not os.path.exists(path):
         return json.dumps({"error": f"File not found: {path}"})

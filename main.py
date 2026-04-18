@@ -38,7 +38,11 @@ import tools.memory  # noqa: F401  — registers memory_save, memory_search, mem
 import tools.notebooklm  # noqa: F401  — registers notebooklm_* tools
 import tools.session  # noqa: F401  — registers session_save, session_recall, session_clear
 import tools.web  # noqa: F401  — registers web_search, fetch_url, read_url
+import tools.tool_index  # noqa: F401  — registers search_tools, load_tools
 from tools import call, schemas
+from tools.tool_index import build_index
+
+build_index()
 
 from system_prompt import SYSTEM_PROMPT, MODEL
 from rendering import (

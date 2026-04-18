@@ -111,6 +111,7 @@ def _embed(text: str) -> list[float]:
         "Optionally tag the memory for easier filtering. "
         "Returns the ID of the saved memory."
     ),
+    always_on=True,
     parameters={
         "type": "object",
         "properties": {
@@ -150,6 +151,7 @@ def memory_save(content: str, tags: str = "") -> str:
         "Call this before answering questions that may involve previously stored "
         "facts, preferences, or context."
     ),
+    always_on=True,
     parameters={
         "type": "object",
         "properties": {
@@ -197,7 +199,9 @@ def memory_search(query: str, top_k: int = 5) -> str:
 @register(
     description=(
         "List recently saved memories, newest first. "
-        "Useful for reviewing what has been stored or finding IDs for deletion."
+        "Each result includes the memory ID, content, tags, and created_at timestamp. "
+        "Use when you need to review everything stored, audit stale memories, "
+        "or find an ID before calling memory_delete."
     ),
     parameters={
         "type": "object",
