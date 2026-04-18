@@ -32,12 +32,12 @@ _load_dotenv()
 # Import tools
 import ollama
 import tools.builtins  # noqa: F401  — registers built-in tools
-import tools.files  # noqa: F401  — registers write_file, edit_file, read_json, write_json
+import tools.file_tools  # noqa: F401  — registers read_file, file_info, search_file, write_file, write_json, edit_file
 import tools.filesystem  # noqa: F401  — registers list_directory, make_directory, remove_file, get_working_context
 import tools.memory  # noqa: F401  — registers memory_save, memory_search, memory_list, memory_delete
 import tools.notebooklm  # noqa: F401  — registers notebooklm_* tools
 import tools.session  # noqa: F401  — registers session_save, session_recall, session_clear
-import tools.web  # noqa: F401  — registers web_search, read_file, file_info, search_file, read_pdf, fetch_url, read_url
+import tools.web  # noqa: F401  — registers web_search, fetch_url, read_url
 from tools import call, schemas
 
 from system_prompt import SYSTEM_PROMPT, MODEL

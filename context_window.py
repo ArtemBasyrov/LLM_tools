@@ -234,9 +234,10 @@ def maybe_offload_result(tool_name: str, result: str) -> str:
         read_examples.append(f"  … {chunks_needed - 3} more chunk(s)")
 
     placeholder = (
-        f"[Output offloaded: {total_lines} lines | {len(result):,} chars"
+        f"[Output offloaded to scratch file: {total_lines} lines | {len(result):,} chars"
         f" → {scratch_path}]\n"
-        f"\nACTION REQUIRED: Read the scratch file using read_file with start_line/end_line."
+        f"\nACTION REQUIRED: Read the scratch file using the read_file TOOL with start_line/end_line."
+        f"\nDo NOT use bash commands (cat, head, tail, grep, etc.) — use only the read_file or search_file tools."
         f"\nDo NOT call read_file without line range — the file is {total_lines} lines and"
         f" will be offloaded again, creating an infinite loop."
         f"\nDo NOT re-read the original source — it will just offload again."
