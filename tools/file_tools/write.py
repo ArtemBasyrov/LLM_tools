@@ -14,6 +14,8 @@ from tools.file_tools._helpers import confirm, show_write_diff
     description=(
         "Write text content to a file, creating it if it does not exist or "
         "overwriting it entirely if it does. "
+        "REQUIRED: both 'path' and 'content' must be provided in one call — "
+        "there is no separate open/write step. "
         "Use for new files or complete rewrites. "
         "Use edit_file instead for targeted changes to an existing file."
     ),
@@ -26,7 +28,7 @@ from tools.file_tools._helpers import confirm, show_write_diff
             },
             "content": {
                 "type": "string",
-                "description": "The full text content to write to the file.",
+                "description": "The full text to write. Must be provided — omitting it is an error.",
             },
         },
         "required": ["path", "content"],

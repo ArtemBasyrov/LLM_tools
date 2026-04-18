@@ -60,6 +60,36 @@ def _load_cwd_context() -> str:
     )
 
 
+def _load_memories() -> str:
+    """Load all stored memories and inject them into the system prompt."""
+    try:
+        from tools.memory import _get_table  # already imported by main.py before us
+
+        table = _get_table()
+        rows = (
+            table.search()
+            .select(["id", "content", "tags", "created_at"])
+            .limit(100)
+            .to_list()
+        )
+        if not rows:
+            return ""
+        rows.sort(key=lambda r: r.get("created_at", ""), reverse=True)
+        lines = []
+        for r in rows:
+            tags = f" [{r['tags']}]" if r.get("tags") else ""
+            lines.append(f"- [{r['id']}]{tags} {r['content']}")
+        joined = "\n".join(lines)
+        return (
+            "\n\n## Persistent Memory\n\n"
+            "These facts were saved in previous sessions. Treat them as ground truth "
+            "without calling `memory_search` first — unless you need to find something "
+            "not listed here.\n\n" + joined
+        )
+    except Exception:
+        return ""
+
+
 _SESSION_START = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 SYSTEM_PROMPT = f"""\
@@ -89,8 +119,10 @@ Load before call, every time.
 
 ## Memory
 
-- Call `memory_search` at session start when the task may involve previously stored facts,
-  preferences, or decisions.
+- All saved memories are pre-loaded in the **Persistent Memory** section below — use them
+  directly without calling `memory_search` first.
+- Call `memory_search` only when you need to find something specific not visible in the
+  pre-loaded list, or to rank memories by relevance to a query.
 - Call `memory_save` after learning anything worth keeping across sessions.
 - For time-sensitive queries ("today", "latest", "current"), call `get_current_datetime`
   before any web search and include the date in your query.
@@ -155,3 +187,6 @@ to access it. Do NOT re-run the original tool. Do NOT use bash to read the file.
 
 # Append any context files found in the current working directory at startup
 SYSTEM_PROMPT += _load_cwd_context()
+
+# Append all saved memories so the model knows them without calling memory_search
+SYSTEM_PROMPT += _load_memories()

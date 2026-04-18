@@ -85,7 +85,7 @@ from context_window import (
 def chat() -> None:
     # Initialize session
     tools.session._clear_session_file()
-    warmup()
+    warmup(SYSTEM_PROMPT)
     init_scratch_dir()
     context_window = get_context_window()
     print_header(context_window)
@@ -195,10 +195,11 @@ def chat() -> None:
 
                 result = call(fn_name, fn_args)
                 result_str = str(result)
-                # Never offload reads of scratch files — they ARE the offloaded content.
+                # Never offload reads/searches of scratch files — they ARE the offloaded content.
                 # Offloading them again creates an infinite redirect cycle.
                 if not (
-                    fn_name == "read_file" and is_scratch_path(fn_args.get("path", ""))
+                    fn_name in ("read_file", "search_file")
+                    and is_scratch_path(fn_args.get("path", ""))
                 ):
                     result_str = maybe_offload_result(fn_name, result_str)
                 print_tool_result(result_str)

@@ -7,6 +7,9 @@ import shutil
 import textwrap
 from tools import schemas
 
+from rich.console import Console as _RichConsole
+from rich.markdown import Markdown as _Markdown
+
 from context_window import (
     _ansi,
     _IS_TTY,
@@ -135,45 +138,41 @@ def print_tool_result(result: str) -> None:
 def print_response(text: str) -> None:
     w = _term_width()
     print(f"\n{STYLE_ASSISTANT}╭─ assistant {'─' * (w - 14)}╮{_RESET}")
-    for line in (text or "").splitlines():
-        for chunk in textwrap.wrap(line, width=w - 4) or [""]:
-            print(f"  {chunk}")
+    console = _RichConsole(highlight=False, width=w - 4)
+    console.print(_Markdown(text or ""))
     print(f"{STYLE_ASSISTANT}╰{'─' * (w - 2)}╯{_RESET}\n")
 
 
 # --- Streaming response helpers ---
+# Buffer tokens during streaming (single-line progress, no scroll-buffer pollution),
+# then render complete markdown once at the end.
 
-_response_col = 0  # current column inside the response box
+_response_buffer: str = ""
 
 
 def print_response_start() -> None:
-    global _response_col
-    w = _term_width()
-    sys.stdout.write(f"\n{STYLE_ASSISTANT}╭─ assistant {'─' * (w - 14)}╮{_RESET}\n  ")
+    global _response_buffer
+    _response_buffer = ""
+    sys.stdout.write("\n")
     sys.stdout.flush()
-    _response_col = 0
 
 
 def print_response_token(text: str) -> None:
-    global _response_col
-    w = _term_width()
-    inner = w - 4
-    for ch in text:
-        if ch == "\n":
-            sys.stdout.write("\n  ")
-            _response_col = 0
-        else:
-            if _response_col >= inner:
-                sys.stdout.write("\n  ")
-                _response_col = 0
-            sys.stdout.write(ch)
-            _response_col += 1
+    global _response_buffer
+    _response_buffer += text
+    sys.stdout.write(f"\r  {_DIM}▸ {len(_response_buffer)} chars…{_RESET}")
     sys.stdout.flush()
 
 
 def print_response_end() -> None:
+    global _response_buffer
     w = _term_width()
-    sys.stdout.write(f"\n{STYLE_ASSISTANT}╰{'─' * (w - 2)}╯{_RESET}\n\n")
+    sys.stdout.write(f"\r\033[K")  # erase progress line
+    sys.stdout.flush()
+    print(f"{STYLE_ASSISTANT}╭─ assistant {'─' * (w - 14)}╮{_RESET}")
+    console = _RichConsole(highlight=False, width=w - 4)
+    console.print(_Markdown(_response_buffer))
+    sys.stdout.write(f"{STYLE_ASSISTANT}╰{'─' * (w - 2)}╯{_RESET}\n\n")
     sys.stdout.flush()
 
 

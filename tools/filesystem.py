@@ -29,8 +29,8 @@ def _is_file_writing_command(command: str) -> bool:
     import re
 
     patterns = [
-        r">\s*(?!/dev/null\b)\S",  # > redirect, but not to /dev/null
-        r"\btee\b",
+        r"(?<!-)>(?!=)\s*(?!/dev/null\b)\S",  # > redirect, not -> or >= or /dev/null
+        r"\|\s*tee\b",  # tee only dangerous as pipe target
         r"\bdd\b.*\bof=",
         r"\bsponge\b",
     ]
@@ -47,20 +47,20 @@ def _is_dangerous_command(command: str) -> bool:
         # File / directory destruction
         r"\brm\b",
         r"\bshred\b",
-        r"\btruncate\b",
+        r"(?<!\.)\btruncate\b",  # not f.truncate()
         r"\bsrm\b",
         # File / directory mutation
         r"\bmv\b",
         r"\bcp\b",
         r"\bln\b",
-        r"\brename\b",
+        r"(?<!\.)\brename\b",  # not os.rename() / df.rename()
         # Permission / ownership changes
         r"\bchmod\b",
         r"\bchown\b",
         r"\bchgrp\b",
         r"\bumask\b",
         # Disk / filesystem
-        r"\bdd\b",
+        r"\bdd\b.*\b(?:if|of|bs|count)=",  # dd only when it looks like a dd command
         r"\bmkfs\b",
         r"\bfdisk\b",
         r"\bparted\b",
@@ -68,7 +68,6 @@ def _is_dangerous_command(command: str) -> bool:
         r"\bmount\b",
         r"\bumount\b",
         r"\bfsck\b",
-        r"\bformat\b",
         # Process termination
         r"\bkill\b",
         r"\bkillall\b",
@@ -100,7 +99,7 @@ def _is_dangerous_command(command: str) -> bool:
         r"\bgroupadd\b",
         r"\bgroupdel\b",
         r"\bgroupmod\b",
-        r"\bpasswd\b",
+        r"(?<!\w)passwd\b(?!\s*=)",  # not passwd= in connection strings
         # Cron / scheduled tasks
         r"\bcrontab\b",
         r"\bat\b\s",

@@ -12,6 +12,8 @@ from tools.file_tools._helpers import _MAX_BYTES, confirm, show_edit_diff
 @register(
     description=(
         "Edit a file by replacing one exact occurrence of old_string with new_string. "
+        "REQUIRED: path, old_string, and new_string must all be provided in one call — "
+        "there is no separate locate/replace step. "
         "old_string must match the file content exactly (including whitespace and indentation). "
         "Returns an error if old_string is not found or appears more than once. "
         "Use read_file first if you are unsure of the exact text."
@@ -25,17 +27,17 @@ from tools.file_tools._helpers import _MAX_BYTES, confirm, show_edit_diff
             },
             "old_string": {
                 "type": "string",
-                "description": "The exact text to find and replace. Must be unique in the file.",
+                "description": "The exact text to find and replace. Must be unique in the file. Omitting it is an error.",
             },
             "new_string": {
                 "type": "string",
-                "description": "The text to substitute in place of old_string.",
+                "description": "The text to substitute in place of old_string. Omitting it is an error.",
             },
         },
         "required": ["path", "old_string", "new_string"],
     },
 )
-def edit_file(path: str, old_string: str, new_string: str) -> str:
+def edit_file(path: str, old_string: str, new_string: str, **_kwargs) -> str:
     path = os.path.expanduser(path)
     if not os.path.exists(path):
         return json.dumps({"error": f"File not found: {path}"})

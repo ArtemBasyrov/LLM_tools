@@ -132,16 +132,20 @@ def offload() -> None:
     print(f"\r{' ' * len(msg)}\r", end="", flush=True)
 
 
-def warmup() -> None:
+def warmup(system_prompt: str = "") -> None:
     msg = f"  Loading {MODEL}…"
     print(f"{_DIM}{msg}{_RESET}", end="", flush=True)
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.append({"role": "user", "content": "hi"})
     try:
         ollama.chat(
             model=MODEL,
-            messages=[{"role": "user", "content": "hi"}],
+            messages=messages,
             think=False,
             options={"num_predict": 1},
-            keep_alive=15,
+            keep_alive="15m",
         )
     except Exception:
         pass

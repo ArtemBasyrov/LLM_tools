@@ -59,3 +59,10 @@ docs/_build/
 
 # Examples
 examples/output/
+# Added by code-review-graph
+.code-review-graph/
+.claude
+.kiro
+.mcp.json
+.opencode.json
+.windsurfrules
