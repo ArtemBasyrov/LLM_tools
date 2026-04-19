@@ -74,10 +74,6 @@ from context_window import (
     trim_messages,
     offload,
     warmup,
-    init_scratch_dir,
-    cleanup_scratch,
-    maybe_offload_result,
-    is_scratch_path,
     compact_messages,
 )
 
@@ -86,7 +82,6 @@ def chat() -> None:
     # Initialize session
     tools.session._clear_session_file()
     warmup(SYSTEM_PROMPT)
-    init_scratch_dir()
     context_window = get_context_window()
     print_header(context_window)
 
@@ -100,7 +95,6 @@ def chat() -> None:
         except (EOFError, KeyboardInterrupt):
             print(f"\n{STYLE_STATS}Bye.{_RESET}")
             offload()
-            cleanup_scratch()
             break
 
         if not user_input:
@@ -108,7 +102,6 @@ def chat() -> None:
         if user_input.lower() in ("exit", "quit"):
             print(f"{STYLE_STATS}Bye.{_RESET}")
             offload()
-            cleanup_scratch()
             break
 
         # Prepend context usage so the LLM knows how full the window is
@@ -195,13 +188,6 @@ def chat() -> None:
 
                 result = call(fn_name, fn_args)
                 result_str = str(result)
-                # Never offload reads/searches of scratch files — they ARE the offloaded content.
-                # Offloading them again creates an infinite redirect cycle.
-                if not (
-                    fn_name in ("read_file", "search_file")
-                    and is_scratch_path(fn_args.get("path", ""))
-                ):
-                    result_str = maybe_offload_result(fn_name, result_str)
                 print_tool_result(result_str)
 
                 messages.append({"role": "tool", "content": result_str})

@@ -14,6 +14,7 @@ from tools.file_tools._helpers import _MAX_BYTES
 
 _PDF_MAX_CHARS = 100_000
 _MAX_SEARCH_BYTES = 50_000_000
+_DEFAULT_READ_CHARS = 8_000  # chars returned when no range is specified
 
 
 # ---------------------------------------------------------------------------
@@ -28,9 +29,14 @@ _MAX_SEARCH_BYTES = 50_000_000
         "• .pdf — extracts text page by page; use start_page/end_page for large PDFs. "
         "• .json — parses and returns structured data; use key_path to extract a nested value "
         "  (dot-separated, e.g. 'users.0.name'). "
-        "• all other files — returns raw text; use start_line/end_line or start_char/end_char "
-        "  for large files. "
-        "Call file_info first when you don't know a file's size."
+        "• all other files — returns up to 8,000 chars by default; check 'has_more' and "
+        "  use start_char/end_char or start_line/end_line to read subsequent chunks. "
+        "Call file_info first when you don't know a file's size. "
+        "Examples: "
+        "read first chunk → read_file(path='main.py') → has_more=true, next_start_char=8000 → read_file(path='main.py', start_char=8000); "
+        "read specific lines → read_file(path='config.py', start_line=10, end_line=50); "
+        "extract nested JSON → read_file(path='data.json', key_path='users.0.email'); "
+        "read PDF pages 3–5 → read_file(path='report.pdf', start_page=3, end_page=5)."
     ),
     parameters={
         "type": "object",
@@ -42,33 +48,33 @@ _MAX_SEARCH_BYTES = 50_000_000
             # Text params
             "start_line": {
                 "type": "integer",
-                "description": "First line to return (1-indexed, inclusive). Text files only. Ignored if start_char/end_char provided.",
+                "description": "First line to return (1-indexed, inclusive). Text files only. Ignored if start_char/end_char provided. e.g. 51 to start at line 51.",
             },
             "end_line": {
                 "type": "integer",
-                "description": "Last line to return (1-indexed, inclusive). Text files only. Ignored if start_char/end_char provided.",
+                "description": "Last line to return (1-indexed, inclusive). Text files only. Ignored if start_char/end_char provided. e.g. 100 to read lines 51–100.",
             },
             "start_char": {
                 "type": "integer",
-                "description": "Character offset to start reading from (0-indexed). Text files only. Useful for files with very long lines.",
+                "description": "Character offset to start reading from (0-indexed). Text files only. Use next_start_char from a prior response to read the next chunk. e.g. 8000 to start the second chunk.",
             },
             "end_char": {
                 "type": "integer",
-                "description": "Character offset to stop reading at (0-indexed, exclusive). Text files only.",
+                "description": "Character offset to stop reading at (0-indexed, exclusive). Text files only. e.g. 16000 to read chars 8000–16000.",
             },
             # PDF params
             "start_page": {
                 "type": "integer",
-                "description": "First page to read (1-indexed, inclusive). PDF files only.",
+                "description": "First page to read (1-indexed, inclusive). PDF files only. e.g. 5 to start at page 5.",
             },
             "end_page": {
                 "type": "integer",
-                "description": "Last page to read (1-indexed, inclusive). PDF files only.",
+                "description": "Last page to read (1-indexed, inclusive). PDF files only. e.g. 10 to read pages 5–10.",
             },
             # JSON params
             "key_path": {
                 "type": "string",
-                "description": "Dot-separated path to extract a nested value, e.g. 'a.b.0'. JSON files only.",
+                "description": "Dot-separated path to extract a nested value. JSON files only. e.g. 'users.0.email' or 'config.timeout'.",
             },
         },
         "required": ["path"],
@@ -127,6 +133,15 @@ def _read_text(
     start_char: int | None,
     end_char: int | None,
 ) -> str:
+    # No range specified → default to first _DEFAULT_READ_CHARS characters
+    if (
+        start_char is None
+        and end_char is None
+        and start_line is None
+        and end_line is None
+    ):
+        end_char = _DEFAULT_READ_CHARS
+
     if start_char is not None or end_char is not None:
         sc = start_char if start_char is not None else 0
         ec = end_char
@@ -149,6 +164,7 @@ def _read_text(
         actual_end = sc + len(content)
         meta: dict = {
             "path": path,
+            "size_bytes": os.path.getsize(path),
             "chars_returned": f"{sc}–{actual_end}",
             "chars_in_chunk": len(content),
         }
@@ -177,7 +193,12 @@ def _read_text(
         lines = lines[sl:el]
 
     content = "".join(lines)
-    meta = {"path": path, "total_lines": total_lines}
+    meta = {
+        "path": path,
+        "size_bytes": os.path.getsize(path),
+        "total_lines": total_lines,
+        "chars_returned": len(content),
+    }
     if truncated:
         meta["warning"] = f"File truncated at {_MAX_BYTES} bytes."
     if start_line or end_line:
@@ -206,7 +227,7 @@ def _read_json(path: str, key_path: str | None) -> str:
         except (KeyError, IndexError, ValueError, TypeError) as e:
             return json.dumps({"error": f"Key path '{key_path}' not found: {e}"})
 
-    result: dict = {"path": path, "data": data}
+    result: dict = {"path": path, "size_bytes": os.path.getsize(path), "data": data}
     if truncated:
         result["warning"] = (
             f"File truncated at {_MAX_BYTES} bytes — JSON may be incomplete."
@@ -255,6 +276,7 @@ def _read_pdf(path: str, start_page: int | None, end_page: int | None) -> str:
 
     result: dict = {
         "path": path,
+        "size_bytes": os.path.getsize(path),
         "total_pages": total_pages,
         "pages_returned": f"{sp + 1}–{sp + len(pages_out)}",
         "pages": pages_out,
@@ -277,9 +299,12 @@ def _read_pdf(path: str, start_page: int | None, end_page: int | None) -> str:
         "Return metadata about a file — size, line count, a short preview, and "
         "chunking guidance — without reading the entire file. "
         "Always call this before read_file when you don't know a file's size. "
-        "The response includes 'fits_in_one_read' (bool) and, when false, "
-        "'chunks_needed' and 'suggested_chunk_lines' so you know exactly how to "
-        "split subsequent read_file calls."
+        "Returns fits_in_one_read (bool); when false, also returns chunks_needed and "
+        "suggested_chunk_lines so you know exactly how to split subsequent read_file calls. "
+        "Examples: "
+        "unknown file → file_info(path='big_log.txt') → fits_in_one_read=false, chunks_needed=4 → read_file with line ranges; "
+        "want preview before deciding whether to read → file_info(path='data.csv', preview_lines=5); "
+        "NOT for: actually reading file content — use read_file for that."
     ),
     parameters={
         "type": "object",
@@ -290,7 +315,7 @@ def _read_pdf(path: str, start_page: int | None, end_page: int | None) -> str:
             },
             "preview_lines": {
                 "type": "integer",
-                "description": "Number of lines to include as a preview (default 20, max 100).",
+                "description": "Lines to include as a preview (default 20, max 100). Increase if you need more context before deciding how to read.",
             },
         },
         "required": ["path"],
@@ -361,10 +386,17 @@ def file_info(path: str, preview_lines: int = 20) -> str:
 
 @register(
     description=(
-        "Search a file for lines matching a regex pattern and return matching lines "
-        "with their line numbers and optional surrounding context. "
-        "Use this to locate relevant sections in a file that is too large to read "
-        "entirely, then use read_file with start_line/end_line to read those sections."
+        "Search a file for lines matching a regex pattern. Returns matching lines "
+        "with line numbers, optional surrounding context, and file metadata "
+        "(size_bytes, total_chars, total_lines). "
+        "Use to locate relevant sections in large files, then read with start_line/end_line. "
+        "For files with very long lines (minified JS, single-line JSON, CSV), set "
+        "context_chars to limit output size per match instead of relying on context_lines. "
+        "Examples: "
+        "find a function definition → search_file(path='app.py', pattern=r'def\\s+process_order'); "
+        "find config key case-insensitively → search_file(path='settings.py', pattern='database_url', context_lines=3); "
+        "search minified JS → search_file(path='bundle.js', pattern='initApp', context_chars=200); "
+        "NOT for: searching across multiple files — use bash with grep for that."
     ),
     parameters={
         "type": "object",
@@ -375,11 +407,15 @@ def file_info(path: str, preview_lines: int = 20) -> str:
             },
             "pattern": {
                 "type": "string",
-                "description": "Regular expression pattern to search for (case-insensitive by default).",
+                "description": "Regular expression to search for (case-insensitive by default). Example: r'def\\s+\\w+' to find function definitions.",
             },
             "context_lines": {
                 "type": "integer",
-                "description": "Lines to include before and after each match (default 2, max 10).",
+                "description": "Lines to include before and after each match (default 2, max 10). For long-line files use context_chars instead.",
+            },
+            "context_chars": {
+                "type": "integer",
+                "description": "Max characters per line in context output (default unlimited). Use for minified/single-line files to prevent huge output. Example: 500.",
             },
             "max_matches": {
                 "type": "integer",
@@ -397,6 +433,7 @@ def search_file(
     path: str,
     pattern: str,
     context_lines: int = 2,
+    context_chars: int | None = None,
     max_matches: int = 20,
     case_sensitive: bool = False,
 ) -> str:
@@ -407,6 +444,8 @@ def search_file(
         return json.dumps({"error": f"Path is not a file: {path}"})
 
     context_lines = max(0, min(context_lines, 10))
+    if context_chars is not None:
+        context_chars = max(1, int(context_chars))
     max_matches = max(1, min(max_matches, 100))
     flags = 0 if case_sensitive else re.IGNORECASE
 
@@ -437,8 +476,19 @@ def search_file(
             if len(match_indices) >= max_matches:
                 break
 
+    size_bytes = os.path.getsize(path)
+    total_chars = sum(len(l) for l in all_lines)
+
     if not match_indices:
-        return json.dumps({"path": path, "total_lines": total_lines, "matches": []})
+        return json.dumps(
+            {
+                "path": path,
+                "size_bytes": size_bytes,
+                "total_chars": total_chars,
+                "total_lines": total_lines,
+                "matches": [],
+            }
+        )
 
     blocks: list[tuple[int, int]] = []
     for idx in match_indices:
@@ -453,19 +503,27 @@ def search_file(
     for start, end in blocks:
         lines_out = []
         for i in range(start, end + 1):
-            lines_out.append(
-                {
-                    "line_number": i + 1,
-                    "text": all_lines[i].rstrip("\n"),
-                    "match": bool(regex.search(all_lines[i])),
-                }
-            )
+            text = all_lines[i].rstrip("\n")
+            truncated_chars = None
+            if context_chars is not None and len(text) > context_chars:
+                truncated_chars = len(text) - context_chars
+                text = text[:context_chars] + f"…[{truncated_chars} chars omitted]"
+            entry: dict = {
+                "line_number": i + 1,
+                "text": text,
+                "match": bool(regex.search(all_lines[i])),
+            }
+            if truncated_chars:
+                entry["line_truncated"] = True
+            lines_out.append(entry)
         matches.append(
             {"start_line": start + 1, "end_line": end + 1, "lines": lines_out}
         )
 
     result: dict = {
         "path": path,
+        "size_bytes": size_bytes,
+        "total_chars": total_chars,
         "total_lines": total_lines,
         "pattern": pattern,
         "match_count": len(match_indices),

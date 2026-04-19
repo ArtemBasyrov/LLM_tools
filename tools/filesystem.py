@@ -166,23 +166,24 @@ def _confirm_dangerous_command(command: str) -> bool:
     description=(
         "Execute an arbitrary bash command — filesystem ops, git, grep, process inspection, "
         "package management, or any shell task. "
-        "Use this whenever a built-in tool does not cover the operation. "
-        "Potentially destructive commands (rm, mv, kill, shutdown, sudo, git reset, "
-        "pip uninstall, iptables, crontab, wget, etc.) require manual user "
-        "confirmation before execution. "
+        "Use this whenever a built-in file/web tool does not cover the operation. "
+        "Destructive commands (rm, mv, kill, sudo, git reset, pip uninstall, etc.) "
+        "require manual user confirmation before execution. "
         "IMPORTANT: writing files via bash (>, >>, tee, dd of=, etc.) is BLOCKED — "
-        "use write_file or edit_file instead."
+        "use write_file or edit_file instead. "
+        "Examples: "
+        "list files → bash(command='ls -la /tmp'); "
+        "git status → bash(command='git log --oneline -10'); "
+        "install package → bash(command='pip install httpx'); "
+        "find Python files → bash(command='find . -name \"*.py\" -type f'); "
+        "NOT for: writing file content (use write_file/edit_file) or reading a known file (use read_file)."
     ),
     parameters={
         "type": "object",
         "properties": {
             "command": {
                 "type": "string",
-                "description": (
-                    "The bash command to execute. Examples: "
-                    "'ls -la', 'mkdir -p new_folder', 'rm -rf old_folder', "
-                    "'pwd', 'find . -name '*.py' -type f'"
-                ),
+                "description": "The bash command to run. e.g. 'ls -la', 'git status', 'pip install requests', 'find . -name \"*.py\"'.",
             },
         },
         "required": ["command"],
@@ -251,26 +252,25 @@ def bash(command: str) -> str:
 @register(
     description=(
         "Read agent/project context files (CLAUDE.md, AGENT.md, AGENTS.md, "
-        ".cursorrules, .windsurfrules, .clinerules) from a directory and its "
-        "parents. Call this when starting work in an unfamiliar directory so you "
-        "understand any project-specific instructions or conventions before acting."
+        ".cursorrules, .windsurfrules, .clinerules) from a directory and its parents. "
+        "Call this when starting work in an unfamiliar directory so you understand "
+        "project-specific instructions or conventions before taking any action. "
+        "Results are ordered outermost-to-innermost so inner files override outer ones. "
+        "Examples: "
+        "opening a new project → read_context_files(directory='/home/user/myproject'); "
+        "current directory → read_context_files() with no args; "
+        "only local dir, skip parents → read_context_files(directory='.', walk_parents=false)."
     ),
     parameters={
         "type": "object",
         "properties": {
             "directory": {
                 "type": "string",
-                "description": (
-                    "Absolute or relative path to search. "
-                    "Defaults to the current working directory."
-                ),
+                "description": "Absolute or relative path to search. Defaults to the current working directory.",
             },
             "walk_parents": {
                 "type": "boolean",
-                "description": (
-                    "If true (default), also read context files found in parent "
-                    "directories up to the filesystem root."
-                ),
+                "description": "If true (default), also reads context files in parent directories up to the filesystem root. Set false to restrict to the given directory only.",
             },
         },
         "required": [],

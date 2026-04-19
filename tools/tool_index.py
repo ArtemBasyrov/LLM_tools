@@ -54,9 +54,14 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
     description=(
         "Discover available tools by semantic search. "
         "Call this when you need a capability that is not in your current tool list. "
-        "Pass one or more short, action-oriented queries (e.g. ['read file', 'list directory']). "
-        "Returns tool names and descriptions. "
-        "You MUST then call load_tools with the chosen names before invoking them."
+        "Pass one or more short, action-oriented queries. "
+        "Returns tool names and descriptions ranked by relevance. "
+        "You MUST call load_tools with chosen names before invoking them — "
+        "found tools are NOT active until loaded. "
+        "Examples: "
+        "need to read a file → search_tools(queries=['read file']) → load_tools(['read_file']); "
+        "need both read and write → search_tools(queries=['read file', 'write file']); "
+        "NOT for: tools already visible in your tool list — call them directly."
     ),
     always_on=True,
     parameters={
@@ -65,7 +70,7 @@ def _cosine(a: np.ndarray, b: np.ndarray) -> float:
             "queries": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "One or more short search queries, e.g. ['write file', 'search file content'].",
+                "description": "One or more short action-oriented queries. e.g. ['write file', 'search file content', 'run shell command'].",
             },
             "top_k": {
                 "type": "integer",
@@ -112,9 +117,13 @@ def search_tools(queries: list[str], top_k: int = 5) -> str:
 @register(
     description=(
         "Activate one or more tools so you can call them. "
-        "Pass the tool names returned by search_tools. "
+        "Pass the exact tool names returned by search_tools. "
         "Returns the full parameter schemas for each activated tool. "
-        "The activated tools are available immediately — you can call them in the same response."
+        "The activated tools are available immediately in the same response. "
+        "Examples: "
+        "after search_tools returned 'read_file' → load_tools(tool_names=['read_file']); "
+        "activate multiple at once → load_tools(tool_names=['read_file', 'write_file', 'bash']); "
+        "NOT for: tools already in your active list — they are already callable without loading."
     ),
     always_on=True,
     parameters={
@@ -123,7 +132,7 @@ def search_tools(queries: list[str], top_k: int = 5) -> str:
             "tool_names": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "List of tool names to activate, e.g. ['read_file', 'write_file'].",
+                "description": "Exact tool names to activate. e.g. ['read_file', 'write_file']. Names must match what search_tools returned.",
             },
         },
         "required": ["tool_names"],

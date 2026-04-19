@@ -43,8 +43,12 @@ def _clear_session_file() -> None:
         "Call this — and only this — when the <context_window> tag shows token usage above ~75%. "
         "Saves a self-contained Markdown summary so the conversation can be trimmed "
         "without losing task state. Immediately follow with session_recall() to reload the snapshot. "
-        "NOT for persisting general knowledge — use memory_save for that. "
-        "Recommended sections: ## Current Task, ## Key Facts & Decisions, ## Pending Work, ## Outcomes."
+        "NOT for persisting general knowledge across sessions — use memory_save for that. "
+        "Recommended sections: ## Current Task, ## Key Facts & Decisions, ## Pending Work, ## Outcomes. "
+        "Examples: "
+        "context >75% during a long refactor → session_save(content='## Current Task\\nRefactoring auth module...') then session_recall(); "
+        "starting a brand-new topic → session_clear() instead of session_save; "
+        "NOT for: facts you want to remember next week (use memory_save for cross-session persistence)."
     ),
     always_on=True,
     parameters={
@@ -75,7 +79,11 @@ def session_save(content: str) -> str:
         "Read the current session snapshot to restore task context after a context-window trim. "
         "Call this immediately after session_save — the trim will have removed old messages "
         "and the snapshot is now the only record of prior work. "
-        "Returns {found: true, content: '...'} on success, or {found: false} if no snapshot exists yet."
+        "Returns {found: true, content: '...'} on success, or {found: false} if no snapshot exists yet. "
+        "Examples: "
+        "just called session_save → call session_recall() immediately to reload context; "
+        "unsure if a snapshot exists → session_recall(), check found field before acting on content; "
+        "NOT for: loading permanent facts — use memory_search for cross-session knowledge."
     ),
     always_on=True,
 )
@@ -96,7 +104,10 @@ def session_recall() -> str:
 @register(
     description=(
         "Erase the current session snapshot. "
-        "Use when starting a completely new task where prior context is no longer relevant."
+        "Use when starting a completely new task where prior context is no longer relevant. "
+        "Examples: "
+        "user switches from 'write a blog post' to 'debug a Python script' → session_clear() to avoid stale context contaminating the new task; "
+        "snapshot is outdated and would mislead more than help → session_clear() then rebuild with session_save if needed."
     ),
     always_on=True,
 )

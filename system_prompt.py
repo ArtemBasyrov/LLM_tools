@@ -141,26 +141,30 @@ system metadata; never quote it back.
 - Call `session_clear()` only when starting a completely unrelated new task.
 - `memory_save` is for durable cross-session facts, not context management.
 
-## Offloaded Tool Output
-
-When a tool result starts with `[Output offloaded:`, the full content was saved to a
-scratch file. Use `read_file` (with `start_line`/`end_line`) or `search_file` (regex)
-to access it. Do NOT re-run the original tool. Do NOT use bash to read the file.
-
 ## File Access
 
-- Unknown file size → call `file_info` first, then follow `fits_in_one_read`:
-  - `true` → `read_file` with no line range.
-  - `false` → use `search_file` to locate the relevant section, or read in chunks
-    using `suggested_chunk_lines`.
+- Unknown file size → call `file_info` first; it returns `size_bytes`, `fits_in_one_read`,
+  and reading guidance (`read_strategy` or `char_read_strategy`).
+  - `fits_in_one_read: true` → `read_file` with no range (returns first 8,000 chars; check
+    `has_more` and continue with `start_char=next_start_char` if needed).
+  - `fits_in_one_read: false`, normal file → read in chunks with `start_line`/`end_line`
+    using `suggested_chunk_lines`, or char-based with `start_char`/`end_char` in steps of 8,000.
+  - `long_line_file: true` (minified JS, single-line JSON, CSV) → use `start_char`/`end_char`
+    with `suggested_chunk_chars`; line-based chunking is unreliable for these files.
+- Every `read_file` and `search_file` result includes `size_bytes` and char count in its
+  metadata — use these to decide whether follow-up chunk calls are needed.
+- For `search_file` on long-line files, set `context_chars` to cap characters per line in
+  the output and prevent oversized results.
 - Entering a new directory → call `read_context_files(directory=<path>)` to load
   CLAUDE.md / AGENT.md / .cursorrules before taking action.
 
 ## URL Access
 
-- Call `fetch_url` first, then follow `fits_in_one_read`:
-  - `true` → `read_url(chunk=1)`.
-  - `false` → `read_url` with `chunk=1, 2, …` up to `chunks_needed`.
+- Call `fetch_url` first; it returns `total_chars`, `fits_in_one_read`, `chunks_needed`.
+  - `fits_in_one_read: true` → `read_url(chunk=1)` (returns up to 8,000 chars).
+  - `fits_in_one_read: false` → call `read_url` with `chunk=1, 2, …` up to `chunks_needed`.
+- Every `read_url` response includes `total_chars`, `chars_returned`, and — when there is
+  more content — `has_more: true` and `next_chunk`.
 
 ## Destructive Actions
 

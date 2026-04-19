@@ -17,14 +17,18 @@ from tools.file_tools._helpers import confirm, show_write_diff
         "REQUIRED: both 'path' and 'content' must be provided in one call — "
         "there is no separate open/write step. "
         "Use for new files or complete rewrites. "
-        "Use edit_file instead for targeted changes to an existing file."
+        "Use edit_file instead for targeted changes to an existing file. "
+        "Examples: "
+        "create a new script → write_file(path='scripts/deploy.sh', content='#!/bin/bash\\n...'); "
+        "completely replace a config → write_file(path='config.yaml', content='...full new content...'); "
+        "NOT for: small targeted changes to existing files (use edit_file to avoid overwriting unchanged content)."
     ),
     parameters={
         "type": "object",
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Absolute or relative path to the file.",
+                "description": "Absolute or relative path to the file. Parent directories are created automatically.",
             },
             "content": {
                 "type": "string",
@@ -56,7 +60,11 @@ def write_file(path: str, content: str) -> str:
     description=(
         "Validate and write a JSON value to a file with consistent formatting (2-space indent). "
         "Use this instead of write_file when the output must be well-formed JSON — "
-        "it rejects malformed input before touching the file."
+        "it validates and rejects malformed input before touching the file. "
+        "Examples: "
+        'write a config → write_json(path=\'config.json\', content=\'{"host": "localhost", "port": 5432}\'); '
+        "write a list → write_json(path='items.json', content='[{\"id\": 1}, {\"id\": 2}]'); "
+        "NOT for: non-JSON formats like YAML, TOML, or plain text (use write_file for those)."
     ),
     parameters={
         "type": "object",
@@ -67,7 +75,7 @@ def write_file(path: str, content: str) -> str:
             },
             "content": {
                 "type": "string",
-                "description": "The JSON content to write (as a JSON-encoded string).",
+                "description": "A valid JSON string to write. e.g. '{\"key\": \"value\"}' or '[1, 2, 3]'. Will be rejected if not valid JSON.",
             },
         },
         "required": ["path", "content"],

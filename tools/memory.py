@@ -106,10 +106,14 @@ def _embed(text: str) -> list[float]:
     description=(
         "Persist a discrete fact, user preference, decision, or observation "
         "to long-term semantic memory so it can be retrieved by future sessions. "
-        "Use for durable knowledge (e.g. 'user prefers dark mode', 'project uses Python 3.12'). "
+        "Use for durable knowledge that should survive across conversations. "
         "NOT for context-window management — use session_save for that. "
         "Optionally tag the memory for easier filtering. "
-        "Returns the ID of the saved memory."
+        "Returns the ID of the saved memory. "
+        "Examples: "
+        "user says 'I prefer snake_case everywhere' → content='User prefers snake_case naming convention' tags='preference,style'; "
+        "discover project uses Python 3.12 → content='Project requires Python 3.12+' tags='fact,project'; "
+        "NOT for: per-session summaries or transient task state (use session_save instead)."
     ),
     always_on=True,
     parameters={
@@ -117,11 +121,11 @@ def _embed(text: str) -> list[float]:
         "properties": {
             "content": {
                 "type": "string",
-                "description": "The text to remember. Be specific and self-contained — this will be read without context later.",
+                "description": "The text to remember. Be specific and self-contained — this will be read without the surrounding conversation later. e.g. 'User prefers dark mode in all UIs' not just 'dark mode'.",
             },
             "tags": {
                 "type": "string",
-                "description": "Optional comma-separated tags, e.g. 'preference,ui' or 'fact,python'.",
+                "description": "Optional comma-separated tags for filtering. e.g. 'preference,ui' or 'fact,python,infrastructure'.",
             },
         },
         "required": ["content"],
@@ -147,9 +151,13 @@ def memory_save(content: str, tags: str = "") -> str:
 @register(
     description=(
         "Search saved memories by semantic similarity to a query. "
-        "Returns the most relevant memories ranked by relevance. "
-        "Call this before answering questions that may involve previously stored "
-        "facts, preferences, or context."
+        "Returns the most relevant memories ranked by relevance score (0–1). "
+        "Call this at session start and before answering questions that may involve "
+        "previously stored facts, preferences, or decisions. "
+        "Examples: "
+        "user asks about their preferred style → query='code style preferences'; "
+        "before configuring a project → query='project setup database credentials'; "
+        "low relevance scores (<0.5) mean no useful memories exist — don't force a result."
     ),
     always_on=True,
     parameters={
@@ -157,7 +165,7 @@ def memory_save(content: str, tags: str = "") -> str:
         "properties": {
             "query": {
                 "type": "string",
-                "description": "Natural-language description of what you are looking for.",
+                "description": "Natural-language description of what you are looking for. e.g. 'user Python version preference' or 'database host configuration'.",
             },
             "top_k": {
                 "type": "integer",
@@ -201,7 +209,11 @@ def memory_search(query: str, top_k: int = 5) -> str:
         "List recently saved memories, newest first. "
         "Each result includes the memory ID, content, tags, and created_at timestamp. "
         "Use when you need to review everything stored, audit stale memories, "
-        "or find an ID before calling memory_delete."
+        "or find an ID before calling memory_delete. "
+        "Examples: "
+        "user asks 'what do you remember?' → memory_list(limit=20); "
+        "need to clean up outdated facts → memory_list() to get IDs, then memory_delete per ID; "
+        "NOT for targeted lookup — use memory_search when you know what you're looking for."
     ),
     parameters={
         "type": "object",
@@ -246,14 +258,17 @@ def memory_list(limit: int = 10) -> str:
     description=(
         "Delete a memory by its ID. "
         "Use this to remove outdated, incorrect, or no-longer-relevant memories. "
-        "Get IDs from memory_search or memory_list."
+        "Get IDs from memory_search or memory_list. "
+        "Examples: "
+        "user says 'forget my old database host' → memory_search('database host') to find ID, then memory_delete(id='a1b2c3d4'); "
+        "auditing stale memories → memory_list() then memory_delete for each stale ID."
     ),
     parameters={
         "type": "object",
         "properties": {
             "id": {
                 "type": "string",
-                "description": "The ID of the memory to delete (8-character string).",
+                "description": "The 8-character memory ID to delete. e.g. 'a1b2c3d4'. Get this from memory_search or memory_list.",
             },
         },
         "required": ["id"],

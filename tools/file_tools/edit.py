@@ -15,8 +15,14 @@ from tools.file_tools._helpers import _MAX_BYTES, confirm, show_edit_diff
         "REQUIRED: path, old_string, and new_string must all be provided in one call — "
         "there is no separate locate/replace step. "
         "old_string must match the file content exactly (including whitespace and indentation). "
-        "Returns an error if old_string is not found or appears more than once. "
-        "Use read_file first if you are unsure of the exact text."
+        "Returns an error if old_string is not found or appears more than once — "
+        "add more surrounding context to make it unique. "
+        "Use read_file first if you are unsure of the exact text. "
+        "Examples: "
+        "(1) Rename a function → old_string='def calculate_total(', new_string='def compute_total('; "
+        "(2) Delete a line → old_string='debug = True\\n', new_string=''; "
+        "(3) Append after anchor → old_string='# end of config', new_string='# end of config\\nNEW_SETTING = 42'; "
+        "(4) NOT for complete rewrites — use write_file when replacing the entire file content."
     ),
     parameters={
         "type": "object",
@@ -27,11 +33,11 @@ from tools.file_tools._helpers import _MAX_BYTES, confirm, show_edit_diff
             },
             "old_string": {
                 "type": "string",
-                "description": "The exact text to find and replace. Must be unique in the file. Omitting it is an error.",
+                "description": "The exact text to find and replace. Must be unique in the file. Include enough surrounding context (e.g. the full line) to make it unambiguous. Omitting it is an error.",
             },
             "new_string": {
                 "type": "string",
-                "description": "The text to substitute in place of old_string. Omitting it is an error.",
+                "description": "The text to substitute in place of old_string. Pass an empty string '' to delete old_string. To append after old_string, repeat old_string and add the new content after it. Omitting it is an error.",
             },
         },
         "required": ["path", "old_string", "new_string"],

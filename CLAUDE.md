@@ -43,8 +43,8 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 │   ├── __init__.py       # Tool registry: register(), activate(), schemas()
 │   ├── tool_index.py     # search_tools, load_tools — tool discovery meta-tools
 │   ├── builtins.py       # get_current_datetime, calculate
-│   ├── file_tools/       # read_file, file_info, search_file, write_file, edit_file, write_json, read_context_files
-│   ├── filesystem.py     # bash
+│   ├── file_tools/       # read_file, file_info, search_file, write_file, edit_file, write_json
+│   ├── filesystem.py     # bash, read_context_files
 │   ├── memory.py         # memory_save, memory_search, memory_list, memory_delete
 │   ├── web.py            # web_search, fetch_url, read_url
 │   ├── session.py        # session_save, session_recall, session_clear
@@ -76,16 +76,16 @@ Tools are split into **always-on** (visible every turn) and **hidden** (discover
 
 | Tool | Module | Description |
 |------|--------|-------------|
-| `read_file` | `file_tools/` | Read file content with optional line range |
-| `file_info` | `file_tools/` | File metadata and read strategy |
-| `search_file` | `file_tools/` | Regex search within a file |
+| `read_file` | `file_tools/` | Read file content; returns first 8,000 chars by default with `has_more` + `next_start_char`; use `start_char`/`end_char` or `start_line`/`end_line` for chunks |
+| `file_info` | `file_tools/` | File metadata (`size_bytes`, `line_count`, `fits_in_one_read`, read strategy); call before `read_file` on unknown files |
+| `search_file` | `file_tools/` | Regex search within a file; result includes `size_bytes`, `total_chars`, line numbers; use `context_chars` for minified/long-line files |
 | `write_file` | `file_tools/` | Create or overwrite a file |
 | `edit_file` | `file_tools/` | Replace a specific string in a file |
 | `write_json` | `file_tools/` | Write structured data as JSON |
-| `read_context_files` | `file_tools/` | Load CLAUDE.md / AGENT.md from a directory |
 | `bash` | `filesystem.py` | Run a shell command |
-| `fetch_url` | `web.py` | Fetch URL metadata and preview |
-| `read_url` | `web.py` | Fetch a specific chunk of a URL's content |
+| `read_context_files` | `filesystem.py` | Load CLAUDE.md / AGENT.md from a directory and its parents |
+| `fetch_url` | `web.py` | URL metadata (`total_chars`, `fits_in_one_read`, `chunks_needed`) + preview; call before `read_url` on unknown pages |
+| `read_url` | `web.py` | Fetch a specific 8,000-char chunk of a URL; response includes `total_chars`, `has_more`, `next_chunk` |
 | `memory_list` | `memory.py` | List recent memories |
 | `memory_delete` | `memory.py` | Delete a memory by ID |
 | `notebooklm_create_notebook` | `notebooklm.py` | Create a NotebookLM notebook |
@@ -122,8 +122,25 @@ Example: `"Book flight tickets after confirming the user's requirements (time, d
 - **"Goldilocks" specificity** — state preconditions and impactful limits (e.g., `"max 750 lines"`); skip minor ones. Keep under 1,024 characters.
 - **Action-oriented names** — use verbs: `search_documents`, `get_weather_data`. Avoid abbreviations (`api_get_user`, not `u_g_a`). Use consistent casing (`snake_case`) — inconsistency implies hierarchy to the model.
 - **Document hidden parameter rules** — if mutually optional params have a required-at-least-one constraint, say so explicitly: `"At least one of agent_id | user_id required"`.
-- **Inline examples in param descriptions** — e.g., `'from:user@example.com is:unread'` for a query filter.
+- **Inline examples in param descriptions** — e.g., `'from:user@example.com is:unread'` for a query filter. For complex types, include a minimal valid example of the required structure.
 - **Use enums for finite values** — don't leave categorical options as ambiguous prose.
+- **Don't over-document** — avoid listing every edge case; context rot confuses the model. Focus on the most impactful constraints only.
+
+### Examples in tool descriptions
+
+Provide examples at two levels:
+
+**1. Inline in parameter descriptions** — tiny, actionable strings showing exact expected format. Keep them immediately after the param description so the model sees them at decision time. Example:
+```python
+"description": "Dot-separated path to a nested JSON value. e.g. 'users.0.email' or 'config.timeout'"
+```
+
+**2. Few-shot examples in the tool description** — 2–5 canonical examples using a consistent **Input → Output** or **Use case → Call** pattern. Cover:
+- A simple happy-path case
+- A hard or ambiguous request  
+- An edge case or "refrain" scenario (where the tool should NOT be called)
+
+Keep few-shot examples inside the description string, or in the system prompt if they are too long for the schema. Prefer real-world phrasing over synthetic toy cases.
 
 ## System Prompt Best Practices for Tool Use
 
