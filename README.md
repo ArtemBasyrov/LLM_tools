@@ -138,8 +138,36 @@ cp .env.example .env
 | `OLLAMA_MODEL` | `qwen3.5:35b` | Ollama model to use (must be pulled locally) |
 | `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
 | `LLM_MEMORY_DIR` | `~/.llm_memory` | Custom location for semantic memory database |
+| `LLM_PLAN_DIR` | `~/.llm_plans` | Custom location for agentic plan JSON files |
+| `AGENTIC_MODE` | `true` | Wrap each turn in the orchestrator state machine |
+| `ENFORCE_PLANNING` | `true` | Block final answer while an active plan has unverified steps |
+| `CRITIC_MAX_ROUNDS` | `2` | Max critic revise rounds per final response (0 disables) |
 
 The system supports models with 32K+ context windows.
+
+## Agentic Mode
+
+When `AGENTIC_MODE=true`, each turn is driven by a state machine
+(`agent/orchestrator.py`) that enforces rigorous execution:
+
+1. **Triage** — complex requests get a `[SYSTEM TRIAGE]` nudge asking the
+   model to draft a plan via `plan_create` + `plan_add_step`.
+2. **Plan** — plans persist to `~/.llm_plans/active.json` so work can span
+   context windows and process restarts. On startup the system prompt notes
+   any active plan so the model can resume.
+3. **Verify** — every `plan_complete_step` call triggers a `[SYSTEM VERIFIER]`
+   injection demanding the model independently confirm the claimed evidence
+   (via `read_file` / `bash` / `search_file`) and call `verify_report(...)`.
+   Unverified steps roll back to `in_progress`.
+4. **Critic** — final responses run through up to `CRITIC_MAX_ROUNDS` of
+   self-review. The model emits `{"accept": bool, "issues": [...]}` JSON;
+   unresolved issues trigger a revise loop.
+5. **Snapshot nudge** — when context ≥70% full and a plan is active, the
+   orchestrator asks the model to call `session_save` so the plan survives
+   trimming.
+
+All synthetic injections use an authoritative `[SYSTEM <ROLE>]` prefix and
+are kept sticky across context compaction.
 
 ## Adding New Tools
 

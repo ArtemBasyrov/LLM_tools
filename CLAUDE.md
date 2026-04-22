@@ -38,7 +38,15 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 ├── main.py               # Main chat loop and Ollama integration
 ├── system_prompt.py      # System prompt and model configuration
 ├── rendering.py          # Display and formatting helpers
-├── context_window.py     # Context window management
+├── context_window.py     # Context window management + sticky-message compaction
+├── agent/
+│   ├── __init__.py       # Agentic package root
+│   ├── orchestrator.py   # State machine wrapping each user turn
+│   ├── plan.py           # Plan/Step dataclasses + disk I/O (JSON)
+│   ├── triage.py         # Complexity heuristic (simple vs. complex)
+│   ├── verifier.py       # [SYSTEM VERIFIER] injection builder
+│   ├── critic.py         # [SYSTEM CRITIC] injection + JSON verdict parser
+│   └── prompts.py        # Templated strings for all synthetic injections
 ├── tools/
 │   ├── __init__.py       # Tool registry: register(), activate(), schemas()
 │   ├── tool_index.py     # search_tools, load_tools — tool discovery meta-tools
@@ -48,7 +56,11 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 │   ├── memory.py         # memory_save, memory_search, memory_list, memory_delete
 │   ├── web.py            # web_search, fetch_url, read_url
 │   ├── session.py        # session_save, session_recall, session_clear
+│   ├── plan_tools.py     # plan_create, plan_add_step, plan_start_step,
+│   │                     #   plan_complete_step, plan_status, plan_log, plan_abandon
+│   ├── verify_tools.py   # verify_report (called during VERIFYING phase)
 │   └── notebooklm.py     # notebooklm_* tools
+├── tests/                # pytest suite (run: micromamba run -n internet python -m pytest tests/ -v)
 ├── CLAUDE.md
 └── README.md
 ```
@@ -71,6 +83,14 @@ Tools are split into **always-on** (visible every turn) and **hidden** (discover
 | `session_save` | `session.py` | Snapshot context for window management |
 | `session_recall` | `session.py` | Reload snapshot after trim |
 | `session_clear` | `session.py` | Erase the current snapshot |
+| `plan_create` | `plan_tools.py` | Start a new plan with a goal (errors if one is active unless `replace=True`) |
+| `plan_add_step` | `plan_tools.py` | Append an atomic step with `description` + `verification` criterion |
+| `plan_start_step` | `plan_tools.py` | Transition a pending step to `in_progress` |
+| `plan_complete_step` | `plan_tools.py` | Mark a step complete with `evidence`; triggers `[SYSTEM VERIFIER]` injection |
+| `plan_status` | `plan_tools.py` | Inspect the active plan's full state |
+| `plan_log` | `plan_tools.py` | Append a note to a step |
+| `plan_abandon` | `plan_tools.py` | Archive the active plan with a reason |
+| `verify_report` | `verify_tools.py` | Report the outcome of a verification; `verified=false` rolls the step back |
 
 ### Hidden tools (load on demand)
 
@@ -96,6 +116,59 @@ Tools are split into **always-on** (visible every turn) and **hidden** (discover
 | `notebooklm_generate` | `notebooklm.py` | Generate an artifact (summary, FAQ, etc.) |
 | `notebooklm_list_artifacts` | `notebooklm.py` | List generated artifacts |
 | `notebooklm_download` | `notebooklm.py` | Download an artifact |
+
+## Agentic Mode
+
+When `AGENTIC_MODE=true` (default), each turn runs through the
+`Orchestrator` state machine in `agent/orchestrator.py`:
+
+1. **Triage** — `agent/triage.py` classifies the request. Complex requests
+   get a `[SYSTEM TRIAGE]` injection demanding the model draft a plan
+   before answering.
+2. **Plan** — plans are dataclasses (`agent/plan.py`) persisted as JSON at
+   `~/.llm_plans/active.json` (override with `LLM_PLAN_DIR`). The active
+   plan is loaded at startup so work can resume across sessions.
+3. **Verify** — every `plan_complete_step` call queues a
+   `[SYSTEM VERIFIER]` injection asking the model to independently confirm
+   the claimed evidence (via `read_file` / `bash` / `search_file`) then
+   call `verify_report(...)`. Steps with `verified=False` roll back to
+   `in_progress`.
+4. **Critic** — final responses run through up to `CRITIC_MAX_ROUNDS`
+   rounds of self-review (`agent/critic.py`). Verdict is a JSON object on
+   its own line: `{"accept": bool, "issues": [...]}`.
+5. **Plan-nudge** — if the model emits a final response while the plan
+   still has unverified steps, orchestrator injects
+   `[SYSTEM ORCHESTRATOR]` nudging it back to work (capped at 2 per turn).
+6. **Snapshot-nudge** — when context is ≥70% full AND a plan is active,
+   orchestrator asks the model to call `session_save` so the plan
+   context survives the next trim (fires once per turn).
+
+### Conventions
+
+- All harness-injected messages use the prefix `[SYSTEM <ROLE>]` — the
+  system prompt teaches the model these are authoritative, not user
+  speech.
+- These messages are sticky: `context_window._is_sticky` preserves them
+  across `_fast_prune` compaction.
+- `Orchestrator` accepts injected `chat_fn`, `tool_call_fn`, `renderer`,
+  etc., for testability. Tests use a scripted `FakeChat` (see
+  `tests/test_orchestrator.py`).
+
+### Relevant env vars
+
+| Variable | Default | Effect |
+|----------|---------|--------|
+| `AGENTIC_MODE` | `true` | Master switch for the orchestrator |
+| `ENFORCE_PLANNING` | `true` | Block final answer while plan incomplete |
+| `CRITIC_MAX_ROUNDS` | `2` | Max critic revise rounds per final response |
+| `LLM_PLAN_DIR` | `~/.llm_plans` | Where plan JSON lives |
+
+### Tests
+
+Run the suite in the `internet` micromamba env:
+```bash
+micromamba run -n internet python -m pytest tests/ -v
+```
 
 ## Semantic Memory
 

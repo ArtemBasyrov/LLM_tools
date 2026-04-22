@@ -124,6 +124,66 @@ def print_tool_call(name: str, args: dict) -> None:
     print(f"  {STYLE_TOOL_CALL}⚙ {name}({args_str}){_RESET}")
 
 
+# Orchestrator event styling — distinct from tool calls/results so the user
+# visibly sees harness-driven scrutiny (triage, verifier injection, critic).
+_STYLE_ORCH = _DIM + _FG_CYAN
+
+_ORCH_ICONS = {
+    "triage": "◇",
+    "verifier-queued": "⧗",
+    "verifier": "⟳",
+    "plan-nudge": "↻",
+    "snapshot-nudge": "⤓",
+    "critic": "⟳",
+    "critic-revise": "⟲",
+}
+
+
+def print_orchestrator_event(kind: str, detail: str = "") -> None:
+    """One-line notice for a harness-driven event (verifier/critic/nudge/triage)."""
+    icon = _ORCH_ICONS.get(kind, "•")
+    tail = f"  {detail}" if detail else ""
+    print(f"  {_STYLE_ORCH}{icon} {kind}{tail}{_RESET}")
+
+
+class CLIRenderer:
+    """Adapter: satisfies the Orchestrator's duck-typed Renderer protocol by
+    delegating to the print_* module-level functions in this file."""
+
+    def thinking_start(self):
+        print_thinking_start()
+
+    def thinking_token(self, text: str):
+        print_thinking_token(text)
+
+    def thinking_end(self):
+        print_thinking_end()
+
+    def response_start(self):
+        print_response_start()
+
+    def response_token(self, text: str):
+        print_response_token(text)
+
+    def response_end(self):
+        print_response_end()
+
+    def tool_call(self, name: str, args: dict):
+        print_tool_call(name, args)
+
+    def tool_result(self, result: str):
+        print_tool_result(result)
+
+    def stats(self, elapsed, pt, et, cu, cw):
+        print_stats(elapsed, pt, et, cu, cw)
+
+    def orchestrator_event(self, kind: str, detail: str = ""):
+        print_orchestrator_event(kind, detail)
+
+    def blank_line(self):
+        print()
+
+
 def print_tool_result(result: str) -> None:
     display = (
         result[:_TOOL_RESULT_MAX] + f"… ({len(result)} chars)"

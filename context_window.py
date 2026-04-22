@@ -172,6 +172,16 @@ def compact_messages(messages: list, used: int, total: int) -> bool:
     return compacted
 
 
+def _is_sticky(msg: dict) -> bool:
+    """Harness-injected synthetic messages (verifier / critic / triage / nudge)
+    carry authoritative context that the model is taught to trust. They are
+    small and rare, so we preserve them across trims."""
+    if msg.get("role") != "user":
+        return False
+    content = msg.get("content", "") or ""
+    return content.startswith("[SYSTEM ")
+
+
 def _surgical_clear(
     messages: list,
     keep_recent: int = 8,
@@ -198,14 +208,18 @@ def _surgical_clear(
 
 
 def _fast_prune(messages: list, keep_recent: int = 10) -> bool:
-    """Drop middle user/assistant messages, keeping system message + last keep_recent."""
+    """Drop middle user/assistant messages, keeping system message, any
+    sticky orchestrator injections, and last keep_recent."""
     if len(messages) <= keep_recent + 1:
         return False
     system_msg = messages[0]
     tail = messages[-keep_recent:]
-    messages[:] = [system_msg] + tail
+    middle = messages[1:-keep_recent]
+    sticky = [m for m in middle if _is_sticky(m)]
+    messages[:] = [system_msg] + sticky + tail
     print(
-        f"\n{_DIM}  [context: fast pruning — kept system + last {keep_recent} messages]{_RESET}\n"
+        f"\n{_DIM}  [context: fast pruning — kept system + {len(sticky)} sticky + "
+        f"last {keep_recent} messages]{_RESET}\n"
     )
     return True
 

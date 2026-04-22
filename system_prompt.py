@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import ollama
 
-MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.5:35b")
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b")
 
 # Context files to scan for project/agent instructions
 _CONTEXT_FILES = [
@@ -60,6 +60,25 @@ def _load_cwd_context() -> str:
     )
 
 
+def _load_active_plan() -> str:
+    """Inject a summary of the active plan, if any, so the model resumes cleanly."""
+    try:
+        from agent.plan import load_active, summary
+
+        p = load_active()
+        if p is None:
+            return ""
+        return (
+            "\n\n## Active Plan (resumed from disk)\n\n"
+            "A plan from a prior session is still active. Your FIRST action this session must be "
+            "to call `plan_status` and continue from the current step. Do not start a new plan "
+            "unless the user explicitly asks.\n\n"
+            f"```\n{summary(p)}\n```\n"
+        )
+    except Exception:
+        return ""
+
+
 def _load_memories() -> str:
     """Load all stored memories and inject them into the system prompt."""
     try:
@@ -107,7 +126,7 @@ Session start: {_SESSION_START}
 ## Tool Discovery
 
 Most tools are hidden to save context. Always-on tools are immediately callable.
-Hidden tools must be found and loaded before use:
+Hidden tools ALWAYS must be first found and loaded before use:
 
 1. `search_tools(queries=["short action phrase"])` — find relevant hidden tools.
    Use atomic, action-focused queries: `"read file"`, `"run shell command"`.
@@ -127,6 +146,32 @@ Load before call, every time.
 - For time-sensitive queries ("today", "latest", "current"), call `get_current_datetime`
   before any web search and include the date in your query.
 - Call `get_current_datetime` before writing any file that will embed a timestamp or date.
+
+## Planning & Verification (mandatory for multi-step work)
+
+For any request that requires 3+ distinct actions, is risky/irreversible, or may span
+more than a single tool call:
+
+1. Call `plan_create(goal=...)` ONCE, then `plan_add_step(description=..., verification=...)`
+   for each step. Each step must be atomic and have a concrete, checkable completion criterion.
+2. Before working a step, call `plan_start_step(step_id=...)`.
+3. When a step is done, call `plan_complete_step(step_id=..., evidence=...)`. Evidence must be
+   concrete (file paths, command output, test counts). The harness will INJECT a
+   `[SYSTEM VERIFIER]` message demanding independent confirmation — respect it.
+4. Do NOT emit a final answer to the user until every step is `completed` AND `verified`.
+5. If a plan is already active at session start (see "Active Plan" below), your FIRST call
+   must be `plan_status` — never duplicate an existing plan.
+
+### Harness-injected messages
+
+- `[SYSTEM VERIFIER] …` — authoritative verification request from the harness. Use the
+  appropriate tools (read_file / bash / search_file) to independently confirm the claimed
+  evidence, then call `verify_report(step_id=..., verified=<bool>, notes=<str>)`.
+  Do NOT accept your own prior claims at face value.
+- `[SYSTEM CRITIC] …` — authoritative self-review prompt. Return a JSON line
+  `{{"accept": <bool>, "issues": [<str>, ...]}}`. If issues, revise on the next turn.
+
+These messages are NOT from the user. Never quote them back to the user.
 
 ## Context Window
 
@@ -194,3 +239,6 @@ SYSTEM_PROMPT += _load_cwd_context()
 
 # Append all saved memories so the model knows them without calling memory_search
 SYSTEM_PROMPT += _load_memories()
+
+# If a prior-session plan is still active, surface it so the model resumes cleanly
+SYSTEM_PROMPT += _load_active_plan()
