@@ -291,7 +291,7 @@ class Orchestrator:
     # Inference
     # ------------------------------------------------------------------
 
-    def _run_inference(self, stats: TurnStats) -> bool:
+    def _run_inference(self, stats: TurnStats, suppress_response: bool = False) -> bool:
         """Run one ollama.chat cycle + tool dispatch. Returns True if tool_calls fired."""
         stream = self._chat(
             model=self.model,
@@ -308,34 +308,43 @@ class Orchestrator:
         content_parts: list[str] = []
         msg_tool_calls: list = []
 
-        for chunk in stream:
-            cmsg = chunk.message
-            if getattr(cmsg, "thinking", None):
-                if not thinking_open:
-                    self._renderer.thinking_start()
-                    thinking_open = True
-                self._renderer.thinking_token(cmsg.thinking)
-                thinking_parts.append(cmsg.thinking)
-            if getattr(cmsg, "content", None):
-                if thinking_open:
-                    self._renderer.thinking_end()
-                    thinking_open = False
-                if not response_open:
-                    self._renderer.response_start()
-                    response_open = True
-                self._renderer.response_token(cmsg.content)
-                content_parts.append(cmsg.content)
-            if getattr(cmsg, "tool_calls", None):
-                msg_tool_calls = cmsg.tool_calls
-            if getattr(chunk, "done", False):
-                last_prompt = getattr(chunk, "prompt_eval_count", 0) or 0
-                stats.prompt_tokens += last_prompt
-                stats.eval_tokens += getattr(chunk, "eval_count", 0) or 0
-                self.context_used = last_prompt
+        try:
+            for chunk in stream:
+                cmsg = chunk.message
+                if getattr(cmsg, "thinking", None):
+                    if not thinking_open:
+                        self._renderer.thinking_start()
+                        thinking_open = True
+                    self._renderer.thinking_token(cmsg.thinking)
+                    thinking_parts.append(cmsg.thinking)
+                if getattr(cmsg, "content", None):
+                    if thinking_open:
+                        self._renderer.thinking_end()
+                        thinking_open = False
+                    if not suppress_response:
+                        if not response_open:
+                            self._renderer.response_start()
+                            response_open = True
+                        self._renderer.response_token(cmsg.content)
+                    content_parts.append(cmsg.content)
+                if getattr(cmsg, "tool_calls", None):
+                    msg_tool_calls = cmsg.tool_calls
+                if getattr(chunk, "done", False):
+                    last_prompt = getattr(chunk, "prompt_eval_count", 0) or 0
+                    stats.prompt_tokens += last_prompt
+                    stats.eval_tokens += getattr(chunk, "eval_count", 0) or 0
+                    self.context_used = last_prompt
+        except KeyboardInterrupt:
+            if thinking_open:
+                self._renderer.thinking_end()
+            if response_open and not suppress_response:
+                self._renderer.response_end()
+            self._renderer.orchestrator_event("interrupted", "")
+            raise
 
         if thinking_open:
             self._renderer.thinking_end()
-        if response_open:
+        if response_open and not suppress_response:
             self._renderer.response_end()
 
         full_content = "".join(content_parts)
@@ -480,9 +489,9 @@ class Orchestrator:
             "critic", f"round {self._critic_round}/{self.critic_max_rounds}"
         )
 
-        # Run one inference to get the verdict
+        # Run one inference to get the verdict (suppress assistant box display)
         stats = TurnStats()
-        _ = self._run_inference(stats)
+        _ = self._run_inference(stats, suppress_response=True)
         # The verdict lives in self._last_response
         verdict = _critic.parse_verdict(self._last_response)
 

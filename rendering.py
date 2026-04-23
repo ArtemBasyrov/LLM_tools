@@ -17,6 +17,7 @@ from context_window import (
     _BOLD,
     _DIM,
     _ITALIC,
+    _FG_RED,
     _FG_CYAN,
     _FG_GREEN,
     _FG_YELLOW,
@@ -57,7 +58,7 @@ def print_header(context_window: int) -> None:
     print(f"\n{_DIM}Tools:{_RESET}  {tools_list}")
     print(f"{_DIM}Context window:{_RESET}  {context_window:,} tokens")
     print(
-        f"{_DIM}Type  {_RESET}{_BOLD}exit{_RESET}{_DIM}  or press  {_RESET}{_BOLD}Ctrl-C{_RESET}{_DIM}  to quit{_RESET}\n"
+        f"{_DIM}Type  {_RESET}{_BOLD}exit{_RESET}{_DIM}  to quit  ·  {_RESET}{_BOLD}Ctrl-C{_RESET}{_DIM}  during generation to interrupt{_RESET}\n"
     )
     print(hr())
     print()
@@ -126,7 +127,7 @@ def print_tool_call(name: str, args: dict) -> None:
 
 # Orchestrator event styling — distinct from tool calls/results so the user
 # visibly sees harness-driven scrutiny (triage, verifier injection, critic).
-_STYLE_ORCH = _DIM + _FG_CYAN
+_STYLE_ORCH = _FG_RED
 
 _ORCH_ICONS = {
     "triage": "◇",
@@ -136,6 +137,7 @@ _ORCH_ICONS = {
     "snapshot-nudge": "⤓",
     "critic": "⟳",
     "critic-revise": "⟲",
+    "interrupted": "✕",
 }
 
 

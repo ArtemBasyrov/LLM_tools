@@ -94,7 +94,11 @@ def chat() -> None:
             offload()
             break
 
-        orchestrator.turn(user_input)
+        try:
+            orchestrator.turn(user_input)
+        except KeyboardInterrupt:
+            print(f"\n{STYLE_STATS}[interrupted]{_RESET}")
+            continue
 
 
 if __name__ == "__main__":

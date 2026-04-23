@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import ollama
 
-MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:35b")
+MODEL = os.environ.get("OLLAMA_MODEL", "qwen3.6:27b")
 
 # Context files to scan for project/agent instructions
 _CONTEXT_FILES = [
