@@ -39,6 +39,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
 from agent import critic as _critic
+from agent import modes as _modes
 from agent import plan as _plan
 from agent import prompts
 from agent import triage as _triage
@@ -189,7 +190,13 @@ class Orchestrator:
         self._pending_verifications: list[int] = []
         self._critic_round = 0
         self._last_response: str = ""
-        self._snapshot_nudged: bool = False  # one nudge per turn max
+        self._snapshot_nudged: bool = False
+
+        # Mode state — last applied mode, so we can detect transitions and
+        # (de)activate mode-specific tools / inject the mode addendum exactly
+        # once per change. Initialized to whatever modes.get_current_mode()
+        # reports so the first turn injects the correct addendum.
+        self._applied_mode: Optional[_modes.Mode] = None  # one nudge per turn max
 
     # ------------------------------------------------------------------
     # Public entry point
@@ -210,6 +217,19 @@ class Orchestrator:
             }
         )
         self._renderer.blank_line()
+
+        # Mode suggestion — conservative auto-switch. We only override the
+        # current mode if (a) the current mode is the default CHAT (so we
+        # don't fight a user/model explicit choice), and (b) the heuristic
+        # produces a confident non-None suggestion. Model can always call
+        # set_mode to correct us; user can use /mode.
+        if self.agentic and _modes.get_current_mode() == _modes.Mode.CHAT:
+            suggested = _modes.suggest_mode(user_input)
+            if suggested is not None and suggested != _modes.Mode.CHAT:
+                _modes.set_current_mode(suggested)
+                self._renderer.orchestrator_event(
+                    "mode-auto", f"{suggested.value} (heuristic)"
+                )
 
         # Triage (only when no plan is already active — an active plan implies
         # we're already in execution and planning has been done).
@@ -293,6 +313,10 @@ class Orchestrator:
 
     def _run_inference(self, stats: TurnStats, suppress_response: bool = False) -> bool:
         """Run one ollama.chat cycle + tool dispatch. Returns True if tool_calls fired."""
+        # Apply current mode BEFORE assembling the request so the sampling
+        # profile, tool list, and any sticky addendum are up to date.
+        options = self._apply_mode()
+
         stream = self._chat(
             model=self.model,
             messages=self.messages,
@@ -300,6 +324,7 @@ class Orchestrator:
             think=True,
             stream=True,
             keep_alive="15m",
+            options=options,
         )
 
         thinking_open = False
@@ -402,6 +427,50 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Injections
     # ------------------------------------------------------------------
+
+    def _apply_mode(self) -> dict:
+        """Ensure the current mode's addendum + toolset are live, return the
+        sampling options to pass to ``ollama.chat``.
+
+        Runs at the top of every ``_run_inference`` so model-initiated mode
+        switches (via ``set_mode``) take effect on the very next cycle.
+        """
+        try:
+            from tools import (
+                activate as _activate,
+                deactivate as _deactivate,
+                is_registered as _is_registered,
+            )
+        except ImportError:
+            _activate = _deactivate = _is_registered = None
+
+        current = _modes.get_current_mode()
+
+        if self._applied_mode != current:
+            # Inject the addendum as a sticky [SYSTEM MODE] message so the
+            # context_window._is_sticky check preserves it across trims.
+            addendum = _modes.addendum_for(current)
+            if addendum:
+                self.messages.append({"role": "user", "content": addendum})
+
+            # Deactivate previous mode's toolset
+            if self._applied_mode is not None and _deactivate is not None:
+                for t in _modes.toolset_for(self._applied_mode):
+                    _deactivate(t)
+
+            # Activate new mode's toolset
+            if _activate is not None and _is_registered is not None:
+                for t in _modes.toolset_for(current):
+                    if _is_registered(t):
+                        _activate(t)
+
+            self._renderer.orchestrator_event(
+                "mode",
+                f"{self._applied_mode.value if self._applied_mode else 'init'} → {current.value}",
+            )
+            self._applied_mode = current
+
+        return _modes.profile_for(current).to_ollama_options()
 
     def _inject_verifier(self, step_id: int) -> None:
         text = _verifier.build_injection(step_id)

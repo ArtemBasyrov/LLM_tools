@@ -29,7 +29,7 @@ def _is_file_writing_command(command: str) -> bool:
     import re
 
     patterns = [
-        r"(?<!-)>(?!=)\s*(?!/dev/null\b)\S",  # > redirect, not -> or >= or /dev/null
+        r"(?<!-)>(?![=&])\s*(?!/dev/null\b)\S",  # > redirect, not -> or >= or >& or /dev/null
         r"\|\s*tee\b",  # tee only dangerous as pipe target
         r"\bdd\b.*\bof=",
         r"\bsponge\b",

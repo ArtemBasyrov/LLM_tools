@@ -138,6 +138,8 @@ _ORCH_ICONS = {
     "critic": "⟳",
     "critic-revise": "⟲",
     "interrupted": "✕",
+    "mode": "◈",
+    "mode-auto": "◈",
 }
 
 

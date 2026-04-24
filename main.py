@@ -32,9 +32,11 @@ _load_dotenv()
 # Import tools
 import ollama
 import tools.builtins  # noqa: F401  — registers built-in tools
+import tools.debug_tools  # noqa: F401  — registers hypothesis_* ledger (debug mode)
 import tools.file_tools  # noqa: F401  — registers read_file, file_info, search_file, write_file, write_json, edit_file
 import tools.filesystem  # noqa: F401  — registers list_directory, make_directory, remove_file, get_working_context
 import tools.memory  # noqa: F401  — registers memory_save, memory_search, memory_list, memory_delete
+import tools.mode_tools  # noqa: F401  — registers set_mode
 import tools.notebooklm  # noqa: F401  — registers notebooklm_* tools
 import tools.plan_tools  # noqa: F401  — registers plan_create, plan_add_step, plan_start_step, plan_complete_step, plan_status, plan_log, plan_abandon
 import tools.session  # noqa: F401  — registers session_save, session_recall, session_clear
@@ -60,6 +62,7 @@ from context_window import (
     warmup,
 )
 from agent.orchestrator import Orchestrator
+from agent import modes as _modes
 
 
 def chat() -> None:
@@ -93,6 +96,24 @@ def chat() -> None:
             print(f"{STYLE_STATS}Bye.{_RESET}")
             offload()
             break
+
+        # User command: /mode [name]
+        if user_input.startswith("/mode"):
+            parts = user_input.split(None, 1)
+            if len(parts) == 1:
+                cur = _modes.get_current_mode()
+                available = ", ".join(m.value for m in _modes.Mode)
+                print(
+                    f"{STYLE_STATS}  mode: {cur.value}  ·  available: {available}{_RESET}"
+                )
+            else:
+                m = _modes.Mode.parse(parts[1])
+                if m is None:
+                    print(f"{STYLE_STATS}  unknown mode '{parts[1]}'{_RESET}")
+                else:
+                    prev = _modes.set_current_mode(m)
+                    print(f"{STYLE_STATS}  mode: {prev.value} → {m.value}{_RESET}")
+            continue
 
         try:
             orchestrator.turn(user_input)

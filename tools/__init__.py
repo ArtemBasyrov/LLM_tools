@@ -55,6 +55,19 @@ def activate(name: str) -> bool:
     return True
 
 
+def deactivate(name: str) -> bool:
+    """Remove a tool from the active set. Always-on tools are unaffected.
+    Returns True if the tool was in the active set."""
+    if name in _active_tools:
+        _active_tools.remove(name)
+        return True
+    return False
+
+
+def is_registered(name: str) -> bool:
+    return name in _registry
+
+
 def schemas() -> list[dict]:
     """Return schemas for always-on tools plus any activated tools."""
     visible = {n for n, e in _registry.items() if e["always_on"]} | _active_tools

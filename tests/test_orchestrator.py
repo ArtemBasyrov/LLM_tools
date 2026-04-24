@@ -81,7 +81,9 @@ class FakeChat:
         self._scripts = list(scripts)
         self.calls: list[list[dict]] = []  # snapshot of messages passed in
 
-    def __call__(self, *, model, messages, tools, think, stream, keep_alive):
+    def __call__(
+        self, *, model, messages, tools, think, stream, keep_alive, options=None
+    ):
         # Snapshot messages at call time
         self.calls.append([dict(m) for m in messages])
         if not self._scripts:
