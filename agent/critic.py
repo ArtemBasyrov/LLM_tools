@@ -80,5 +80,20 @@ def build_injection(round_num: int, max_rounds: int) -> str:
     return prompts.critic(round_num=round_num, max_rounds=max_rounds)
 
 
+def build_isolated_injection(
+    user_question: str, drafted_response: str, round_num: int, max_rounds: int
+) -> str:
+    return prompts.critic_isolated(
+        user_question=user_question,
+        drafted_response=drafted_response,
+        round_num=round_num,
+        max_rounds=max_rounds,
+    )
+
+
+def isolated_system_prompt() -> str:
+    return prompts.CRITIC_ISOLATED_SYSTEM
+
+
 def build_revision(issues: list[str]) -> str:
     return prompts.critic_revise(issues)

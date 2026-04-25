@@ -213,3 +213,71 @@ def test_critic_disabled_with_zero_rounds(plan_dir, monkeypatch):
     orch, chat = _orch(messages, scripts)
     orch.turn("a question")
     assert len(chat.calls) == 1
+
+
+def test_critic_skipped_when_response_ends_with_question(plan_dir, agentic_critic_2):
+    """If the model's final reply is itself a question to the user, critic
+    must not fire — that's not a delivered answer."""
+    messages = [{"role": "system", "content": "sys"}]
+    renderer = Capturing()
+    scripts = [_final("Did you mean the local repo or the remote one?")]
+    orch, chat = _orch(messages, scripts, renderer=renderer)
+    orch.turn("clean it up")
+    assert len(chat.calls) == 1
+    assert not any(e[0] == "critic" for e in renderer.events)
+
+
+def test_critic_skipped_when_active_plan_incomplete(plan_dir, monkeypatch):
+    """Even if the model emits a final-looking reply, critic must not fire
+    while a plan still has unverified steps. Plan-nudge handles that case;
+    critic should only run on a truly final answer."""
+    monkeypatch.setenv("AGENTIC_MODE", "true")
+    monkeypatch.setenv("CRITIC_MAX_ROUNDS", "2")
+    monkeypatch.setenv(
+        "ENFORCE_PLANNING", "false"
+    )  # disable nudge to isolate critic gate
+
+    import tools.plan_tools as PT
+
+    PT.plan_create(goal="g")
+    PT.plan_add_step(description="s1", verification="v1")
+
+    messages = [{"role": "system", "content": "sys"}]
+    renderer = Capturing()
+    scripts = [_final("I'll get to it.")]
+    orch, chat = _orch(messages, scripts, renderer=renderer)
+    orch.turn("do the thing")
+    # Only the original draft — no critic round.
+    assert len(chat.calls) == 1
+    assert not any(e[0] == "critic" for e in renderer.events)
+
+
+def test_isolated_critic_does_not_pollute_main_messages(plan_dir, agentic_critic_2):
+    """The critic's exchange must not be appended to the running
+    conversation. After a successful critic-accept, main messages
+    contain only: system + user(turn) + assistant(draft)."""
+    messages = [{"role": "system", "content": "sys"}]
+    renderer = Capturing()
+    scripts = [
+        _final("The answer is 42."),
+        _final('{"accept": true, "issues": []}'),
+    ]
+    orch, chat = _orch(messages, scripts, renderer=renderer)
+    orch.turn("what is the meaning of life?")
+
+    # Two chat calls: main draft + isolated verdict
+    assert len(chat.calls) == 2
+
+    # Isolated call's messages must NOT include the original user turn
+    iso_msgs = chat.calls[1]
+    iso_user_contents = [
+        m.get("content", "") for m in iso_msgs if m.get("role") == "user"
+    ]
+    assert len(iso_user_contents) == 1
+    assert "[SYSTEM CRITIC]" in iso_user_contents[0]
+    assert "The answer is 42." in iso_user_contents[0]
+
+    # Main messages: no critic prompt, no verdict JSON appended
+    contents = [m.get("content", "") for m in messages]
+    assert not any("[SYSTEM CRITIC]" in c for c in contents)
+    assert not any('"accept"' in c for c in contents)

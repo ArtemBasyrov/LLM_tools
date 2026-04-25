@@ -152,9 +152,9 @@ class Orchestrator:
 
         # Injected deps
         if chat_fn is None:
-            import ollama
+            import backend
 
-            chat_fn = ollama.chat
+            chat_fn = backend.chat
         self._chat = chat_fn
 
         if tool_call_fn is None or tool_schemas_fn is None:
@@ -533,44 +533,68 @@ class Orchestrator:
 
     def _should_critique(self) -> bool:
         """
-        Decide whether to run a critic pass on the current final response.
-        Skip if the response is empty (e.g., model only returned tool calls
-        but no text — unusual here since we checked no tool calls upstream).
+        Critic only fires when the model has truly delivered a final reply
+        to the user — i.e. the turn is about to switch back to the user.
+
+        Skip if:
+          - response is empty
+          - response ends with a question mark (model is asking the user)
+          - an active plan still has unverified/incomplete steps (model
+            is still working, even if plan-nudges have been exhausted)
         """
-        if not self._last_response.strip():
+        text = (self._last_response or "").strip()
+        if not text:
             return False
+        if text.endswith("?"):
+            return False
+        if self.agentic:
+            active = _plan.load_active()
+            if active is not None and not active.is_complete():
+                return False
         return True
 
     def _run_critic_round(self) -> bool:
         """
-        Inject a critic prompt and run one more inference to get the verdict.
+        Run the critic on the drafted reply via an *isolated* chat call —
+        the request goes to the same model (so no extra VRAM beyond the
+        existing slot's KV cache), but uses a fresh, minimal message list
+        instead of being appended to the running conversation. This
+        prevents the critic exchange from polluting the model's chain of
+        thought.
+
         If the verdict says ``accept``, return False (no loop continuation).
-        If it says ``revise``, inject the revise prompt and return True
-        (so the outer loop runs another inference to get the revised answer).
+        If it says ``revise``, append a revise prompt to the *main*
+        conversation so the next main-loop inference produces a revised
+        reply, and return True.
         """
         self._critic_round += 1
-        prompt_text = _critic.build_injection(
-            round_num=self._critic_round,
-            max_rounds=self.critic_max_rounds,
-        )
-        self.messages.append({"role": "user", "content": prompt_text})
+        drafted = self._last_response
+
+        iso_messages = [
+            {"role": "system", "content": _critic.isolated_system_prompt()},
+            {
+                "role": "user",
+                "content": _critic.build_isolated_injection(
+                    user_question=self._find_last_user_question(),
+                    drafted_response=drafted,
+                    round_num=self._critic_round,
+                    max_rounds=self.critic_max_rounds,
+                ),
+            },
+        ]
+
         self._renderer.orchestrator_event(
-            "critic", f"round {self._critic_round}/{self.critic_max_rounds}"
+            "critic",
+            f"round {self._critic_round}/{self.critic_max_rounds} (isolated)",
         )
 
-        # Run one inference to get the verdict (suppress assistant box display)
-        stats = TurnStats()
-        _ = self._run_inference(stats, suppress_response=True)
-        # The verdict lives in self._last_response
-        verdict = _critic.parse_verdict(self._last_response)
+        verdict_text = self._isolated_inference(iso_messages)
+        verdict = _critic.parse_verdict(verdict_text)
 
         if verdict.accept:
             self._renderer.orchestrator_event("critic", "accepted")
-            return False  # no further loop needed
+            return False
 
-        # Not accepted. Only inject a revise prompt if we have another round
-        # to run — otherwise we'd consume an inference that nothing would
-        # critique.
         if self._critic_round >= self.critic_max_rounds:
             self._renderer.orchestrator_event(
                 "critic",
@@ -584,6 +608,56 @@ class Orchestrator:
             "critic-revise", f"{len(verdict.issues)} issue(s)"
         )
         return True
+
+    def _isolated_inference(self, messages: list[dict]) -> str:
+        """
+        Run a one-off chat call against the same model with the given
+        messages, returning only the visible content. No tools, no
+        rendering, no mutation of ``self.messages``.
+
+        We keep ``stream=True`` so the existing ``chat_fn`` interface
+        (and its test fakes, which always yield iterators) works
+        unchanged. Thinking tokens and tool-call deltas are discarded.
+        """
+        stream = self._chat(
+            model=self.model,
+            messages=messages,
+            tools=None,
+            think=False,
+            stream=True,
+            keep_alive="15m",
+            options={"temperature": 0.0},
+        )
+        parts: list[str] = []
+        try:
+            for chunk in stream:
+                cmsg = getattr(chunk, "message", None)
+                if cmsg is None:
+                    continue
+                piece = getattr(cmsg, "content", None)
+                if piece:
+                    parts.append(piece)
+        except KeyboardInterrupt:
+            self._renderer.orchestrator_event("interrupted", "critic")
+            raise
+        return "".join(parts)
+
+    def _find_last_user_question(self) -> str:
+        """Return the most recent genuine user message (skipping orchestrator
+        injections), with the ``<context_window>`` prefix stripped."""
+        for m in reversed(self.messages):
+            if m.get("role") != "user":
+                continue
+            content = m.get("content", "") or ""
+            head = content.lstrip()[:32]
+            if head.startswith("[SYSTEM "):
+                continue
+            if content.startswith("<context_window>"):
+                end = content.find("</context_window>")
+                if end != -1:
+                    content = content[end + len("</context_window>") :]
+            return content.strip()
+        return ""
 
 
 # ---------------------------------------------------------------------------

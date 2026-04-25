@@ -53,6 +53,31 @@ CRITIC = (
 )
 
 
+CRITIC_ISOLATED_SYSTEM = (
+    "You are a strict reviewer. Your only job is to evaluate an assistant's "
+    "drafted reply and return a JSON verdict. Do not call tools. Do not write "
+    "prose beyond the JSON object."
+)
+
+
+CRITIC_ISOLATED = (
+    "[SYSTEM CRITIC] You are reviewing an assistant's drafted final reply.\n\n"
+    "User's most recent message:\n"
+    "---\n{user_question}\n---\n\n"
+    "Drafted reply:\n"
+    "---\n{drafted_response}\n---\n\n"
+    "Evaluate whether the reply:\n"
+    "  (a) actually answers the user's question\n"
+    "  (b) makes claims without evidence\n"
+    "  (c) misses important caveats or edge cases\n"
+    "  (d) is internally inconsistent\n\n"
+    "Reply with a single JSON object, nothing else:\n"
+    '  {{"accept": true, "issues": []}}  — if the reply is solid\n'
+    '  {{"accept": false, "issues": ["...", "..."]}}  — otherwise\n\n'
+    "Round {round} of {max_rounds}."
+)
+
+
 SNAPSHOT_NUDGE = (
     "[SYSTEM ORCHESTRATOR] Context is {pct}% full and an active plan is in "
     "flight. Before continuing, call `session_save` to snapshot your current "
@@ -92,6 +117,17 @@ def snapshot_nudge(pct: int, current_step: int) -> str:
 
 def critic(round_num: int, max_rounds: int) -> str:
     return CRITIC.format(round=round_num, max_rounds=max_rounds)
+
+
+def critic_isolated(
+    user_question: str, drafted_response: str, round_num: int, max_rounds: int
+) -> str:
+    return CRITIC_ISOLATED.format(
+        user_question=user_question or "(no user question recoverable)",
+        drafted_response=drafted_response or "(empty)",
+        round=round_num,
+        max_rounds=max_rounds,
+    )
 
 
 def critic_revise(issues: list[str]) -> str:

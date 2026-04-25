@@ -6,7 +6,7 @@ import os
 import shutil
 import sys
 
-import ollama
+import backend as ollama
 
 from system_prompt import MODEL
 
