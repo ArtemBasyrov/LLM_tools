@@ -51,15 +51,28 @@ Implement a suite of tools that the local LLM can invoke. Tools should be well-d
 │   ├── __init__.py       # Tool registry: register(), activate(), schemas()
 │   ├── tool_index.py     # search_tools, load_tools — tool discovery meta-tools
 │   ├── builtins.py       # get_current_datetime, calculate
-│   ├── file_tools/       # read_file, file_info, search_file, write_file, edit_file, write_json
-│   ├── filesystem.py     # bash, read_context_files
+│   ├── file_tools/       # split package — see File Tools section below
+│   │   ├── _state.py     # session ledger: read mtimes, backup ring, open-files snapshot
+│   │   ├── _helpers.py   # diffs, line-number gutter, near-miss scorer, confirm()
+│   │   ├── read.py       # read_file (line-numbered, multi-file, outline), file_info, search_file
+│   │   ├── edit.py       # edit_file (replace_all, anchor_line, batch atomic, near-miss hint)
+│   │   ├── write.py      # write_file, write_json (probe-required, autoformat, syntax check)
+│   │   ├── check.py      # check_syntax + shared _check_content used by edit/write
+│   │   ├── format.py     # format_file (ruff/prettier/rustfmt/gofmt)
+│   │   ├── patch.py      # apply_patch (unified-diff multi-file with rollback)
+│   │   └── undo.py       # undo_last_edit, undo_list
+│   ├── code_intel.py     # go_to_definition, find_references (Python AST)
+│   ├── filesystem.py     # bash, read_context_files, list_directory, …
+│   ├── find.py           # find_files (typed glob with hidden-dir guard)
+│   ├── git_tools.py      # git_status, git_diff, git_blame
 │   ├── memory.py         # memory_save, memory_search, memory_list, memory_delete
-│   ├── web.py            # web_search, fetch_url, read_url
-│   ├── session.py        # session_save, session_recall, session_clear
+│   ├── notebooklm.py     # notebooklm_* tools
 │   ├── plan_tools.py     # plan_create, plan_add_step, plan_start_step,
 │   │                     #   plan_complete_step, plan_status, plan_log, plan_abandon
+│   ├── session.py        # session_save, session_recall, session_clear
+│   ├── test_runner.py    # run_tests (pytest with capped output)
 │   ├── verify_tools.py   # verify_report (called during VERIFYING phase)
-│   └── notebooklm.py     # notebooklm_* tools
+│   └── web.py            # web_search, fetch_url, read_url
 ├── tests/                # pytest suite (run: micromamba run -n internet python -m pytest tests/ -v)
 ├── CLAUDE.md
 └── README.md
@@ -94,20 +107,54 @@ Tools are split into **always-on** (visible every turn) and **hidden** (discover
 
 ### Hidden tools (load on demand)
 
+#### File I/O & navigation
+
 | Tool | Module | Description |
 |------|--------|-------------|
-| `read_file` | `file_tools/` | Read file content; returns first 8,000 chars by default with `has_more` + `next_start_char`; use `start_char`/`end_char` or `start_line`/`end_line` for chunks |
-| `file_info` | `file_tools/` | File metadata (`size_bytes`, `line_count`, `fits_in_one_read`, read strategy); call before `read_file` on unknown files |
-| `search_file` | `file_tools/` | Regex search within a file; result includes `size_bytes`, `total_chars`, line numbers; use `context_chars` for minified/long-line files |
-| `write_file` | `file_tools/` | Create or overwrite a file |
-| `edit_file` | `file_tools/` | Replace a specific string in a file |
-| `write_json` | `file_tools/` | Write structured data as JSON |
+| `read_file` | `file_tools/read.py` | Read with **line-numbered output** (`   42 | …`), records on-disk mtime in the session ledger. Supports `paths=[…]` multi-file, `outline=true` for AST-based symbol-only output, `start_char/end_char` and `start_line/end_line` chunking, and `key_path` for JSON. |
+| `file_info` | `file_tools/read.py` | Metadata (`size_bytes`, `line_count`, `fits_in_one_read`) + chunking strategy. Call before `read_file` on unknown files. |
+| `search_file` | `file_tools/read.py` | Regex search within one file with line numbers; use `context_chars` for minified/long-line files. |
+| `write_file` | `file_tools/write.py` | Create or overwrite. **Refuses** to overwrite an existing file that hasn't been read this session unless `overwrite=true`. Honors the staleness ledger. Optional `autoformat=true`. Returns a syntax-check verdict. Backup captured for `undo_last_edit`. |
+| `write_json` | `file_tools/write.py` | Same safety rules as `write_file`; validates and reformats JSON before writing. |
+| `edit_file` | `file_tools/edit.py` | Replace `old_string` with `new_string`. Supports `replace_all`, `anchor_line` (disambiguator when `old_string` is non-unique), and atomic `edits=[{old, new}]` batch with rollback. Returns a **near-miss hint** with line numbers when `old_string` is not found. Stale-read guard against external changes. Auto syntax check + ±5-line post-edit preview. |
+| `apply_patch` | `file_tools/patch.py` | Apply a unified diff across one or more files atomically (uses system `patch`). Per-file stale check; rolls back on failure. |
+| `undo_last_edit` | `file_tools/undo.py` | Revert the most recent `write_file`/`edit_file`/`format_file`/`apply_patch`. New-file creations are undone by deletion. |
+| `undo_list` | `file_tools/undo.py` | List in-session backups (newest first). |
+| `format_file` | `file_tools/format.py` | Run `ruff format` / `prettier` / `rustfmt` / `gofmt` based on extension. Backup captured. |
+| `check_syntax` | `file_tools/check.py` | Per-extension static check: `py_compile` + `ruff` (.py), strict parser (.json/.yaml/.toml). Auto-invoked by `write_file`/`edit_file`. |
+| `find_files` | `find.py` | Typed glob with hard cap (500); skips `node_modules`, `.venv`, `.git`, caches, etc. |
+
+#### Shell / context / code intelligence
+
+| Tool | Module | Description |
+|------|--------|-------------|
 | `bash` | `filesystem.py` | Run a shell command |
 | `read_context_files` | `filesystem.py` | Load CLAUDE.md / AGENT.md from a directory and its parents |
+| `go_to_definition` | `code_intel.py` | Locate a Python symbol's `def`/`class` line in a file or project (AST). |
+| `find_references` | `code_intel.py` | List `Name`+`Attribute` usages of a Python symbol across a file or project (AST). |
+| `run_tests` | `test_runner.py` | Run pytest scoped to a file/dir/nodeid. Output trimmed to last ~6K chars; uses `-x --tb=short`. |
+| `git_status` | `git_tools.py` | Branch + porcelain v2 status as JSON. |
+| `git_diff` | `git_tools.py` | Working tree, staged, single-file, or two-ref unified diff (capped at ~12K chars). |
+| `git_blame` | `git_tools.py` | Author/sha/summary for a line range. |
+
+#### Web
+
+| Tool | Module | Description |
+|------|--------|-------------|
 | `fetch_url` | `web.py` | URL metadata (`total_chars`, `fits_in_one_read`, `chunks_needed`) + preview; call before `read_url` on unknown pages |
 | `read_url` | `web.py` | Fetch a specific 8,000-char chunk of a URL; response includes `total_chars`, `has_more`, `next_chunk` |
+
+#### Memory
+
+| Tool | Module | Description |
+|------|--------|-------------|
 | `memory_list` | `memory.py` | List recent memories |
 | `memory_delete` | `memory.py` | Delete a memory by ID |
+
+#### NotebookLM
+
+| Tool | Module | Description |
+|------|--------|-------------|
 | `notebooklm_create_notebook` | `notebooklm.py` | Create a NotebookLM notebook |
 | `notebooklm_list_notebooks` | `notebooklm.py` | List notebooks |
 | `notebooklm_add_source` | `notebooklm.py` | Add a source to a notebook |
@@ -116,6 +163,56 @@ Tools are split into **always-on** (visible every turn) and **hidden** (discover
 | `notebooklm_generate` | `notebooklm.py` | Generate an artifact (summary, FAQ, etc.) |
 | `notebooklm_list_artifacts` | `notebooklm.py` | List generated artifacts |
 | `notebooklm_download` | `notebooklm.py` | Download an artifact |
+
+## File Tools: feedback loop & safety
+
+The file-tool stack is built around a per-session ledger (`tools/file_tools/_state.py`) that backs four guarantees the local model can rely on:
+
+1. **Stale-read guard.** Every successful `read_file` records the on-disk
+   mtime. `edit_file` / `write_file` / `apply_patch` refuse to act when the
+   file has changed since the last read (tolerance ≈ 50 ms). Override with
+   `skip_stale_check=true` (`edit_file`) or `overwrite=true` (`write_file`)
+   only when explicitly intended.
+2. **Probe-first overwrite.** `write_file` refuses to clobber an existing
+   file that has never been read this session. Forces the model to ground
+   its understanding before destroying content.
+3. **Generate-and-check.** `write_file` and `edit_file` automatically run
+   `_check_content` (py_compile + ruff for `.py`; strict parser for
+   `.json` / `.yaml` / `.toml`) and return the verdict in their tool
+   response. Lets a weak model self-correct without the user pointing out
+   the syntax error.
+4. **Backup ring + undo.** Every mutating op pushes a snapshot into a
+   per-path ring (max 10 per file) and a global 64-deep order. `undo_last_edit`
+   walks back through the global order; new-file creations are undone by
+   deletion. Backup memory cap is 2 MB per file.
+
+The orchestrator additionally maintains a single sticky `[SYSTEM FILES]`
+message at the top of the inference window, refreshed every cycle from the
+ledger. The model sees its current working set, ages, and any external-change
+warnings before generating its next tool call.
+
+When `_surgical_clear` evicts an old `read_file` tool result, it leaves a
+typed pointer keyed by path (`Re-run read_file(path='…') to reload.`) so the
+model knows exactly which call to repeat instead of re-deriving the path.
+
+## Editing patterns the model is expected to follow
+
+- **Read before editing.** `edit_file` enforces this — call `read_file` first
+  so the staleness ledger has a reading to compare against.
+- **Use `outline=true` to skim.** For modules longer than ~200 lines, prefer
+  `read_file(path=…, outline=true)` to get a symbol map, then `start_line`/
+  `end_line` to read the chunk you actually need.
+- **Disambiguate, don't truncate context.** When `old_string` is non-unique,
+  pick `anchor_line` over inventing fake surrounding context. For renames,
+  use `replace_all=true`.
+- **Batch atomically.** When multiple edits in one file go together, pass
+  `edits=[{old, new}, …]` so a single failure rolls back the whole change.
+- **React to checks.** If the response's `checks` field has a non-`ok`
+  value, fix it in the next turn — the model should not "ship" a syntactically
+  broken file.
+- **Use `undo_last_edit` not `bash rm`** to revert mistakes.
+- **Use `find_files` not `bash find`** so result sets stay capped and heavy
+  dirs are skipped automatically.
 
 ## Agentic Mode
 
@@ -142,6 +239,11 @@ When `AGENTIC_MODE=true` (default), each turn runs through the
 6. **Snapshot-nudge** — when context is ≥70% full AND a plan is active,
    orchestrator asks the model to call `session_save` so the plan
    context survives the next trim (fires once per turn).
+7. **Files-refresh** — at the top of every inference cycle the
+   orchestrator updates a single sticky `[SYSTEM FILES]` message with the
+   current open-files registry from the file-tool ledger (path, size,
+   age, staleness). Lets the model reason about its working set without
+   re-reading.
 
 ### Conventions
 

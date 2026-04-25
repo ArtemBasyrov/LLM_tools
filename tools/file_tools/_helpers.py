@@ -1,8 +1,10 @@
 """
-Shared helpers for file tools: ANSI formatting, diff display, user confirmation.
+Shared helpers for file tools: ANSI formatting, diff display, user confirmation,
+line-number gutters.
 """
 
 import difflib
+import os
 import sys
 
 _MAX_BYTES = 100_000  # ~100 KB — keeps context manageable
@@ -38,8 +40,6 @@ def _colorize_diff(lines: list[str]) -> str:
 
 
 def show_write_diff(path: str, new_content: str, label: str = "write_file") -> None:
-    import os
-
     if os.path.exists(path):
         try:
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
@@ -68,9 +68,13 @@ def show_write_diff(path: str, new_content: str, label: str = "write_file") -> N
     )
 
 
-def show_edit_diff(path: str, original: str, old_string: str, new_string: str) -> None:
+def show_edit_diff(
+    path: str, original: str, updated: str, label: str = "edit_file"
+) -> None:
+    """Diff between two full strings (post-replacement). Replaces the older
+    ``show_edit_diff(path, original, old, new)`` form so batch edits and
+    ``replace_all`` use the same path."""
     old_lines = original.splitlines(keepends=True)
-    updated = original.replace(old_string, new_string, 1)
     new_lines = updated.splitlines(keepends=True)
 
     diff = list(
@@ -80,7 +84,7 @@ def show_edit_diff(path: str, original: str, old_string: str, new_string: str) -
     )
 
     print(
-        f"\n{_BOLD}{_YELLOW}── edit_file diff ──────────────────────────────────{_RESET}"
+        f"\n{_BOLD}{_YELLOW}── {label} diff ──────────────────────────────────{_RESET}"
     )
     if diff:
         print(_colorize_diff(diff), end="")
@@ -97,3 +101,56 @@ def confirm(prompt: str) -> bool:
     except (EOFError, KeyboardInterrupt):
         return False
     return answer in ("y", "yes")
+
+
+# ---------------------------------------------------------------------------
+# Line-number gutter (used by read_file output)
+# ---------------------------------------------------------------------------
+
+
+def with_line_numbers(text: str, start_line: int = 1) -> str:
+    """
+    Prefix each line with a right-aligned line number and a separator, so the
+    model can copy line numbers verbatim into edit_file/start_line calls.
+
+    Format:  '   42 | def foo():'
+    """
+    if not text:
+        return text
+    lines = text.splitlines(keepends=True)
+    last = start_line + len(lines) - 1
+    width = max(4, len(str(last)))
+    out = []
+    for i, line in enumerate(lines):
+        n = start_line + i
+        # Preserve whether the original line ended with \n
+        body = line.rstrip("\n")
+        suffix = "\n" if line.endswith("\n") else ""
+        out.append(f"{n:>{width}} | {body}{suffix}")
+    return "".join(out)
+
+
+# ---------------------------------------------------------------------------
+# Near-miss search (for edit_file failures)
+# ---------------------------------------------------------------------------
+
+
+def closest_lines(haystack: str, needle: str, k: int = 2) -> list[dict]:
+    """
+    When ``needle`` is not found in ``haystack``, return the top-k file lines
+    that are closest in similarity, with their line numbers, so the model can
+    correct whitespace / typo errors on the next try.
+    """
+    needle_first = needle.splitlines()[0].strip() if needle.strip() else ""
+    if not needle_first:
+        return []
+    scores: list[tuple[float, int, str]] = []
+    for i, line in enumerate(haystack.splitlines(), start=1):
+        ratio = difflib.SequenceMatcher(None, line.strip(), needle_first).ratio()
+        if ratio >= 0.6:
+            scores.append((ratio, i, line))
+    scores.sort(reverse=True)
+    return [
+        {"line_number": ln, "text": text, "similarity": round(r, 2)}
+        for r, ln, text in scores[:k]
+    ]

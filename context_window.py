@@ -188,20 +188,54 @@ def _surgical_clear(
     keep_recent: int = 8,
     min_chars: int = 500,
 ) -> bool:
-    """Replace bulky tool-result bodies outside the recent tail with a pointer."""
+    """Replace bulky tool-result bodies outside the recent tail with a pointer.
+
+    For tool results that look like a ``read_file`` payload we extract the
+    file path from the JSON envelope and write a typed re-read hint, so the
+    model knows exactly which call to repeat. Other bulky tool results get a
+    generic pointer.
+    """
+    import json as _json
+    import re as _re
+
     cleared = False
     safe_start = max(1, len(messages) - keep_recent)
 
     for i, msg in enumerate(messages):
         if i >= safe_start:
             continue
-        if msg.get("role") == "tool" and len(msg.get("content", "")) > min_chars:
-            original_len = len(msg["content"])
+        if msg.get("role") != "tool":
+            continue
+        body = msg.get("content", "") or ""
+        if len(body) <= min_chars:
+            continue
+
+        # Try to recover a file path from the read_file JSON envelope.
+        path = None
+        try:
+            payload = _json.loads(body)
+            meta = payload.get("meta") if isinstance(payload, dict) else None
+            if isinstance(meta, dict):
+                path = meta.get("path")
+            elif isinstance(payload, dict):
+                path = payload.get("path")
+        except Exception:
+            m = _re.search(r'"path"\s*:\s*"([^"]+)"', body[:400])
+            if m:
+                path = m.group(1)
+
+        original_len = len(body)
+        if path:
+            msg["content"] = (
+                f"[read_file result cleared for {path} — {original_len:,} chars freed. "
+                f"Re-run read_file(path='{path}', ...) to reload.]"
+            )
+        else:
             msg["content"] = (
                 f"[Tool result cleared — {original_len:,} chars removed to free context. "
                 "Re-run the tool to get the result again.]"
             )
-            cleared = True
+        cleared = True
 
     if cleared:
         print(f"\n{_DIM}  [context: surgical tool-result clearing applied]{_RESET}\n")
@@ -255,7 +289,9 @@ def _llm_compact(messages: list, keep_recent: int = 6) -> bool:
                 "## Pending Work\n"
                 "## Artifact Index (files read/created/modified with full paths)\n\n"
                 "Rules: be terse; preserve exact file paths, function names, and error codes; "
-                "no commentary; output only the Markdown block."
+                "no commentary; output only the Markdown block. "
+                "Do NOT embed file contents in the Artifact Index — paths only; "
+                "the model can re-read files on demand via read_file."
             ),
         },
         {"role": "user", "content": "History:\n\n" + "\n\n".join(history_text)},

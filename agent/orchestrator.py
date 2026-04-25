@@ -258,6 +258,10 @@ class Orchestrator:
             # the next trim. Fires at most once per turn.
             self._maybe_nudge_snapshot()
 
+            # Refresh the [SYSTEM FILES] sticky so the model sees its current
+            # working set + any external staleness before the next inference.
+            self._refresh_files_message()
+
             self._compact(self.messages, self.context_used, self.context_window)
 
             had_tool_calls = self._run_inference(stats)
@@ -471,6 +475,40 @@ class Orchestrator:
             self._applied_mode = current
 
         return _modes.profile_for(current).to_ollama_options()
+
+    def _refresh_files_message(self) -> None:
+        """Maintain a single [SYSTEM FILES] message at the tail of self.messages
+        that reflects the current open-files registry. Updated in-place each
+        cycle so it never accumulates copies, and treated as sticky by
+        context_window._is_sticky."""
+        try:
+            from tools.file_tools import _state as _fs
+        except ImportError:
+            return
+        snap = _fs.open_files_snapshot()
+        if not snap:
+            return
+
+        lines = ["[SYSTEM FILES] Open files (read or written this session):"]
+        for e in snap[:20]:
+            tag = "STALE" if e["stale"] else ("missing" if not e["exists"] else "ok")
+            ago = e["last_read_ago_s"]
+            lines.append(f"- {e['path']}  ({e['size_bytes']} B, {ago}s ago, {tag})")
+        if len(snap) > 20:
+            lines.append(f"  …and {len(snap) - 20} more.")
+        lines.append(
+            "Stale files MUST be re-read with read_file before edit_file/write_file."
+        )
+        text = "\n".join(lines)
+
+        # Replace existing [SYSTEM FILES] msg or append a new one. Keep at most one.
+        for i, m in enumerate(self.messages):
+            if m.get("role") == "user" and (m.get("content") or "").startswith(
+                "[SYSTEM FILES]"
+            ):
+                m["content"] = text
+                return
+        self.messages.append({"role": "user", "content": text})
 
     def _inject_verifier(self, step_id: int) -> None:
         text = _verifier.build_injection(step_id)

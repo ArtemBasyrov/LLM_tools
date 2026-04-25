@@ -2,15 +2,18 @@
 read_file  — read any local file (text, PDF, JSON); auto-detects format by extension
 file_info  — metadata + chunking guidance without reading the whole file
 search_file — regex search within a file with context lines
+file_outline — top-level symbols (def/class) for code files; "table of contents"
 """
 
+import ast
 import json
 import math
 import os
 import re
 
 from tools import register
-from tools.file_tools._helpers import _MAX_BYTES
+from tools.file_tools import _state
+from tools.file_tools._helpers import _MAX_BYTES, with_line_numbers
 
 _PDF_MAX_CHARS = 100_000
 _MAX_SEARCH_BYTES = 50_000_000
@@ -24,17 +27,23 @@ _DEFAULT_READ_CHARS = 8_000  # chars returned when no range is specified
 
 @register(
     description=(
-        "Read a local file and return its contents. "
+        "Read a local file and return its contents with line-numbered output "
+        "(format: '   42 | <text>'). "
         "Automatically selects the right mode based on file extension: "
         "• .pdf — extracts text page by page; use start_page/end_page for large PDFs. "
         "• .json — parses and returns structured data; use key_path to extract a nested value "
         "  (dot-separated, e.g. 'users.0.name'). "
         "• all other files — returns up to 8,000 chars by default; check 'has_more' and "
         "  use start_char/end_char or start_line/end_line to read subsequent chunks. "
+        "Pass paths=[a, b, c] to read multiple files in one call. "
+        "Pass outline=true on a code file to get only top-level def/class signatures. "
+        "The on-disk mtime is recorded so edit_file/write_file can detect external changes. "
         "Call file_info first when you don't know a file's size. "
         "Examples: "
-        "read first chunk → read_file(path='main.py') → has_more=true, next_start_char=8000 → read_file(path='main.py', start_char=8000); "
+        "read first chunk → read_file(path='main.py') → has_more=true, next_start_char=8000; "
         "read specific lines → read_file(path='config.py', start_line=10, end_line=50); "
+        "read multiple files → read_file(paths=['a.py', 'b.py']); "
+        "skim a big module → read_file(path='module.py', outline=true); "
         "extract nested JSON → read_file(path='data.json', key_path='users.0.email'); "
         "read PDF pages 3–5 → read_file(path='report.pdf', start_page=3, end_page=5)."
     ),
@@ -43,7 +52,16 @@ _DEFAULT_READ_CHARS = 8_000  # chars returned when no range is specified
         "properties": {
             "path": {
                 "type": "string",
-                "description": "Absolute or relative path to the file.",
+                "description": "Absolute or relative path to the file. Use this OR 'paths', not both.",
+            },
+            "paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of file paths to read in one call. Each is read with default chunking; per-file ranges aren't supported in batch mode.",
+            },
+            "outline": {
+                "type": "boolean",
+                "description": "If true, return only top-level def/class signatures (Python AST). 95% smaller than reading the whole file. Use to decide where to look in detail.",
             },
             # Text params
             "start_line": {
@@ -56,20 +74,24 @@ _DEFAULT_READ_CHARS = 8_000  # chars returned when no range is specified
             },
             "start_char": {
                 "type": "integer",
-                "description": "Character offset to start reading from (0-indexed). Text files only. Use next_start_char from a prior response to read the next chunk. e.g. 8000 to start the second chunk.",
+                "description": "Character offset to start reading from (0-indexed). Text files only. Use next_start_char from a prior response to read the next chunk.",
             },
             "end_char": {
                 "type": "integer",
-                "description": "Character offset to stop reading at (0-indexed, exclusive). Text files only. e.g. 16000 to read chars 8000–16000.",
+                "description": "Character offset to stop reading at (0-indexed, exclusive). Text files only.",
+            },
+            "no_line_numbers": {
+                "type": "boolean",
+                "description": "If true, return raw text without the gutter prefix. Use only when copying file content verbatim into another file. Default false.",
             },
             # PDF params
             "start_page": {
                 "type": "integer",
-                "description": "First page to read (1-indexed, inclusive). PDF files only. e.g. 5 to start at page 5.",
+                "description": "First page to read (1-indexed, inclusive). PDF files only.",
             },
             "end_page": {
                 "type": "integer",
-                "description": "Last page to read (1-indexed, inclusive). PDF files only. e.g. 10 to read pages 5–10.",
+                "description": "Last page to read (1-indexed, inclusive). PDF files only.",
             },
             # JSON params
             "key_path": {
@@ -77,11 +99,14 @@ _DEFAULT_READ_CHARS = 8_000  # chars returned when no range is specified
                 "description": "Dot-separated path to extract a nested value. JSON files only. e.g. 'users.0.email' or 'config.timeout'.",
             },
         },
-        "required": ["path"],
+        "required": [],
     },
 )
 def read_file(
-    path: str,
+    path: str | None = None,
+    paths: list[str] | None = None,
+    outline: bool = False,
+    no_line_numbers: bool = False,
     # text
     start_line: int | None = None,
     end_line: int | None = None,
@@ -93,6 +118,20 @@ def read_file(
     # json
     key_path: str | None = None,
 ) -> str:
+    # Multi-file mode
+    if paths:
+        results = []
+        for p in paths:
+            single = json.loads(
+                read_file(path=p, outline=outline, no_line_numbers=no_line_numbers)
+            )
+            results.append(single)
+        return json.dumps({"files": results}, ensure_ascii=False)
+
+    if not path:
+        return json.dumps({"error": "Provide 'path' or 'paths'."})
+
+    # Coerce numeric params (some clients send strings).
     if start_line is not None:
         start_line = int(start_line)
     if end_line is not None:
@@ -114,11 +153,21 @@ def read_file(
 
     ext = os.path.splitext(path)[1].lower()
 
+    if outline:
+        return _read_outline(path)
     if ext == ".pdf":
-        return _read_pdf(path, start_page, end_page)
+        result = _read_pdf(path, start_page, end_page)
+        _state.record_read(path)
+        return result
     if ext == ".json":
-        return _read_json(path, key_path)
-    return _read_text(path, start_line, end_line, start_char, end_char)
+        result = _read_json(path, key_path)
+        _state.record_read(path)
+        return result
+    result = _read_text(
+        path, start_line, end_line, start_char, end_char, no_line_numbers
+    )
+    _state.record_read(path)
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -132,6 +181,7 @@ def _read_text(
     end_line: int | None,
     start_char: int | None,
     end_char: int | None,
+    no_line_numbers: bool,
 ) -> str:
     # No range specified → default to first _DEFAULT_READ_CHARS characters
     if (
@@ -162,16 +212,31 @@ def _read_text(
             return json.dumps({"error": str(e)})
 
         actual_end = sc + len(content)
+        # Approximate the starting line number (count newlines before sc).
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as fh:
+                prefix = fh.read(sc)
+            start_line_approx = prefix.count("\n") + 1
+        except OSError:
+            start_line_approx = 1
+
+        display = (
+            content
+            if no_line_numbers
+            else with_line_numbers(content, start_line_approx)
+        )
         meta: dict = {
             "path": path,
             "size_bytes": os.path.getsize(path),
             "chars_returned": f"{sc}–{actual_end}",
             "chars_in_chunk": len(content),
+            "starting_line_number": start_line_approx,
+            "line_numbers_shown": not no_line_numbers,
         }
         if has_more:
             meta["has_more"] = True
             meta["next_start_char"] = actual_end
-        return json.dumps({"meta": meta, "content": content}, ensure_ascii=False)
+        return json.dumps({"meta": meta, "content": display}, ensure_ascii=False)
 
     try:
         with open(path, "r", encoding="utf-8", errors="strict") as fh:
@@ -187,24 +252,27 @@ def _read_text(
     lines = raw.splitlines(keepends=True)
     total_lines = len(lines)
 
-    if start_line is not None or end_line is not None:
-        sl = (start_line - 1) if start_line is not None else 0
-        el = end_line if end_line is not None else total_lines
-        lines = lines[sl:el]
+    sl = start_line - 1 if start_line is not None else 0
+    el = end_line if end_line is not None else total_lines
+    selected = lines[sl:el]
+    content = "".join(selected)
+    first_line_num = sl + 1
+    display = content if no_line_numbers else with_line_numbers(content, first_line_num)
 
-    content = "".join(lines)
     meta = {
         "path": path,
         "size_bytes": os.path.getsize(path),
         "total_lines": total_lines,
         "chars_returned": len(content),
+        "starting_line_number": first_line_num,
+        "line_numbers_shown": not no_line_numbers,
     }
     if truncated:
         meta["warning"] = f"File truncated at {_MAX_BYTES} bytes."
     if start_line or end_line:
         meta["lines_returned"] = f"{start_line or 1}–{end_line or total_lines}"
 
-    return json.dumps({"meta": meta, "content": content}, ensure_ascii=False)
+    return json.dumps({"meta": meta, "content": display}, ensure_ascii=False)
 
 
 def _read_json(path: str, key_path: str | None) -> str:
@@ -289,6 +357,101 @@ def _read_pdf(path: str, start_page: int | None, end_page: int | None) -> str:
     return json.dumps(result, ensure_ascii=False)
 
 
+def _read_outline(path: str) -> str:
+    """Return top-level symbols for code files. Python only for now (AST-based);
+    other languages fall back to a regex heuristic."""
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            source = fh.read(_MAX_BYTES)
+    except OSError as e:
+        return json.dumps({"error": str(e)})
+
+    ext = os.path.splitext(path)[1].lower()
+    symbols: list[dict] = []
+
+    if ext == ".py":
+        try:
+            tree = ast.parse(source)
+        except SyntaxError as e:
+            return json.dumps({"error": f"Cannot parse Python file: {e}"})
+
+        def _sig(node: ast.AST) -> str:
+            try:
+                return ast.unparse(node).splitlines()[0]
+            except Exception:
+                return getattr(node, "name", "<?>")
+
+        for node in tree.body:
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                symbols.append(
+                    {
+                        "kind": "function",
+                        "name": node.name,
+                        "line": node.lineno,
+                        "signature": _sig(node).split("\n")[0].rstrip(":"),
+                    }
+                )
+            elif isinstance(node, ast.ClassDef):
+                methods = []
+                for sub in node.body:
+                    if isinstance(sub, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        methods.append({"name": sub.name, "line": sub.lineno})
+                symbols.append(
+                    {
+                        "kind": "class",
+                        "name": node.name,
+                        "line": node.lineno,
+                        "methods": methods,
+                    }
+                )
+            elif isinstance(node, ast.Assign):
+                for tgt in node.targets:
+                    if isinstance(tgt, ast.Name) and tgt.id.isupper():
+                        symbols.append(
+                            {
+                                "kind": "constant",
+                                "name": tgt.id,
+                                "line": node.lineno,
+                            }
+                        )
+    else:
+        # Generic regex pass — picks up def/class/function in JS/TS/Go/Rust.
+        patterns = [
+            (
+                re.compile(r"^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)"),
+                "function",
+            ),
+            (re.compile(r"^\s*(?:export\s+)?class\s+(\w+)"), "class"),
+            (re.compile(r"^\s*(?:pub\s+)?fn\s+(\w+)"), "function"),
+            (re.compile(r"^\s*func\s+(?:\([^)]*\)\s+)?(\w+)"), "function"),
+            (re.compile(r"^\s*(?:pub\s+)?struct\s+(\w+)"), "struct"),
+        ]
+        for i, line in enumerate(source.splitlines(), start=1):
+            for rx, kind in patterns:
+                m = rx.match(line)
+                if m:
+                    symbols.append(
+                        {
+                            "kind": kind,
+                            "name": m.group(1),
+                            "line": i,
+                            "signature": line.strip(),
+                        }
+                    )
+                    break
+
+    return json.dumps(
+        {
+            "path": path,
+            "size_bytes": os.path.getsize(path),
+            "language": ext.lstrip("."),
+            "symbol_count": len(symbols),
+            "symbols": symbols,
+        },
+        ensure_ascii=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # file_info
 # ---------------------------------------------------------------------------
@@ -315,7 +478,7 @@ def _read_pdf(path: str, start_page: int | None, end_page: int | None) -> str:
             },
             "preview_lines": {
                 "type": "integer",
-                "description": "Lines to include as a preview (default 20, max 100). Increase if you need more context before deciding how to read.",
+                "description": "Lines to include as a preview (default 20, max 100).",
             },
         },
         "required": ["path"],
@@ -396,7 +559,7 @@ def file_info(path: str, preview_lines: int = 20) -> str:
         "find a function definition → search_file(path='app.py', pattern=r'def\\s+process_order'); "
         "find config key case-insensitively → search_file(path='settings.py', pattern='database_url', context_lines=3); "
         "search minified JS → search_file(path='bundle.js', pattern='initApp', context_chars=200); "
-        "NOT for: searching across multiple files — use bash with grep for that."
+        "NOT for: searching across multiple files — use find_files / grep."
     ),
     parameters={
         "type": "object",
@@ -407,15 +570,15 @@ def file_info(path: str, preview_lines: int = 20) -> str:
             },
             "pattern": {
                 "type": "string",
-                "description": "Regular expression to search for (case-insensitive by default). Example: r'def\\s+\\w+' to find function definitions.",
+                "description": "Regular expression to search for. Example: r'def\\s+\\w+' to find function definitions.",
             },
             "context_lines": {
                 "type": "integer",
-                "description": "Lines to include before and after each match (default 2, max 10). For long-line files use context_chars instead.",
+                "description": "Lines to include before and after each match (default 2, max 10).",
             },
             "context_chars": {
                 "type": "integer",
-                "description": "Max characters per line in context output (default unlimited). Use for minified/single-line files to prevent huge output. Example: 500.",
+                "description": "Max characters per line in context output (default unlimited). Use for minified/single-line files.",
             },
             "max_matches": {
                 "type": "integer",

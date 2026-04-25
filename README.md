@@ -6,11 +6,14 @@ A tool-calling interface for locally running LLMs, enabling safe, interactive ag
 
 This project provides a suite of tools that a local LLM can invoke via function/tool calling. Built on top of [Ollama](https://ollama.com) and the [Ollama Python SDK](https://github.com/ollama/ollama-python), it supports:
 
-- **File operations** (read, write, edit, JSON parsing)
-- **Web capabilities** (DuckDuckGo search, URL fetching)
-- **Semantic memory** (persistent cross-session facts via vector search)
-- **NotebookLM integration** (Google's LLM-based document analysis)
-- **Filesystem exploration** (directory listing, context queries)
+- **File operations** with a generate-and-check feedback loop — line-numbered reads, near-miss hints on failed edits, atomic batch edits, mtime-based staleness guard, undo ring, and automatic syntax checks (py_compile / ruff / JSON / YAML / TOML)
+- **Code intelligence** — Python AST `go_to_definition` / `find_references`, multi-file `apply_patch`, typed `find_files`
+- **Git tools** — `git_status` / `git_diff` / `git_blame` as first-class JSON tools
+- **Test runner** — focused `pytest` invocations with capped output
+- **Web capabilities** — DuckDuckGo search, URL fetching with chunking
+- **Semantic memory** — persistent cross-session facts via LanceDB + vector search
+- **NotebookLM integration** — Google's LLM-based document analysis
+- **Agentic orchestration** — per-turn state machine with plan/verify/critic loops and a sticky `[SYSTEM FILES]` view of the current working set
 
 ## Quick Start
 
@@ -56,10 +59,14 @@ The model will automatically download if not present. You'll see a prompt-ready 
 | Category | Tools | Description |
 |----------|-------|-------------|
 | **Builtins** | `get_current_datetime`, `calculate` | Time queries and safe arithmetic |
-| **Files** | `write_file`, `edit_file`, `read_json`, `write_json` | File creation/editing with diff previews |
-| **Web** | `web_search`, `read_file`, `file_info`, `search_file`, `read_pdf`, `fetch_url`, `read_url` | Search, file reading with chunking, URL fetching |
-| **Filesystem** | `list_directory`, `get_working_context`, `make_directory`, `remove_file` | Directory navigation and manipulation |
+| **File I/O** | `read_file`, `file_info`, `search_file`, `write_file`, `write_json`, `edit_file`, `apply_patch`, `format_file`, `check_syntax`, `undo_last_edit`, `undo_list` | Line-numbered reads, multi-file batch, AST `outline` mode, near-miss hints on failed edits, replace_all / anchor_line / batch atomic edits, stale-read guard, auto syntax check, undo ring |
+| **Code intelligence** | `go_to_definition`, `find_references` | Python AST-based symbol navigation |
+| **Search & shell** | `find_files`, `bash`, `read_context_files`, `list_directory`, `make_directory`, `remove_file`, `get_working_context` | Typed glob with hidden-dir guard, shell, context-file loader |
+| **Git** | `git_status`, `git_diff`, `git_blame` | Porcelain v2 status, capped diffs, line-range blame |
+| **Tests** | `run_tests` | `pytest -x --tb=short` with output trimming |
+| **Web** | `web_search`, `fetch_url`, `read_url` | DuckDuckGo search, URL fetching with chunking |
 | **Memory** | `memory_save`, `memory_search`, `memory_list`, `memory_delete` | Persistent semantic memory with vector embeddings |
+| **Plan / verify / session** | `plan_*`, `verify_report`, `session_save`, `session_recall`, `session_clear`, `set_mode` | Agentic plan execution, verification, snapshot/recall, mode switching |
 | **NotebookLM** | `notebooklm_create_notebook`, `notebooklm_add_source`, `notebooklm_ask`, `notebooklm_generate`, `notebooklm_list_artifacts`, `notebooklm_download` | Google NotebookLM integration via [notebooklm-py](https://github.com/teng-lin/notebooklm-py) |
 
 ## How It Works
@@ -97,9 +104,15 @@ Persistent memory uses **LanceDB** + **all-MiniLM-L6-v2** embeddings:
 
 ### Safety Features
 
-- **Diff previews** before any file modification
-- **User confirmation** required for destructive operations
-- **Context-aware chunking** for large files (prevents overflow)
+- **Diff previews** before any file modification, with user confirmation on destructive ops
+- **Stale-read guard** — `edit_file` / `write_file` / `apply_patch` refuse to act when the on-disk mtime has moved since the last `read_file` (~50 ms tolerance)
+- **Probe-first overwrite** — `write_file` refuses to clobber an existing file that hasn't been read in this session unless `overwrite=true`
+- **Atomic batch edits** — `edit_file(edits=[…])` and `apply_patch` roll back on any per-step failure
+- **Undo ring** — every mutating op snapshots the file (10-deep per path, 64-deep global); `undo_last_edit` walks back through the ring
+- **Generate-and-check** — `write_file` / `edit_file` / `apply_patch` automatically run a syntax check (py_compile + ruff for `.py`; strict parsers for JSON/YAML/TOML) and return the verdict
+- **Near-miss hints** — when `edit_file`'s `old_string` is missing, the response lists the closest existing lines with line numbers so the model can correct whitespace/typo errors
+- **Context-aware chunking** for large files; old `read_file` tool results are evicted with a path-keyed re-read pointer
+- **`[SYSTEM FILES]` sticky view** — orchestrator maintains a single up-to-date message listing the model's working set + staleness flags
 - **Error recovery** with structured JSON responses
 - **Time-aware prompting** (reminds model to get datetime first)
 
@@ -110,17 +123,30 @@ llm_tools/
 ├── main.py               # Main chat loop and Ollama integration
 ├── system_prompt.py      # System prompt and model configuration
 ├── rendering.py          # Display and formatting helpers
-├── context_window.py     # Context window management
+├── context_window.py     # Context window management + sticky-message compaction
+├── agent/
+│   ├── orchestrator.py   # State machine wrapping each user turn
+│   ├── plan.py / triage / verifier / critic / prompts / modes
 ├── tools/
-│   ├── __init__.py    # Tool registry system
-│   ├── builtins.py    # Basic utilities
-│   ├── files.py       # File manipulation tools
-│   ├── filesystem.py  # Directory operations
-│   ├── memory.py      # Semantic memory (LanceDB + embeddings)
-│   ├── web.py         # Web search + file reading
-│   └── notebooklm.py  # Google NotebookLM integration
-├── CLAUDE.md          # Internal documentation for LLM
-└── README.md          # This file
+│   ├── __init__.py       # Tool registry: register(), activate(), schemas()
+│   ├── tool_index.py     # search_tools, load_tools meta-tools
+│   ├── builtins.py       # get_current_datetime, calculate
+│   ├── file_tools/       # read / write / edit / patch / undo / format / check
+│   │   └── _state.py     # session ledger: mtimes, backup ring, open-files snapshot
+│   ├── code_intel.py     # go_to_definition, find_references (Python AST)
+│   ├── filesystem.py     # bash, list_directory, …
+│   ├── find.py           # find_files (typed glob)
+│   ├── git_tools.py      # git_status, git_diff, git_blame
+│   ├── memory.py         # semantic memory (LanceDB + embeddings)
+│   ├── notebooklm.py     # Google NotebookLM integration
+│   ├── plan_tools.py     # plan_create/add_step/start/complete/log/abandon
+│   ├── session.py        # session_save / recall / clear
+│   ├── test_runner.py    # run_tests
+│   ├── verify_tools.py   # verify_report
+│   └── web.py            # web_search, fetch_url, read_url
+├── tests/                # pytest suite (91 tests)
+├── CLAUDE.md             # Internal documentation for LLM
+└── README.md             # This file
 ```
 
 ## Configuration
@@ -198,10 +224,16 @@ are kept sticky across context compaction.
 
 ### Testing
 
-Manual testing via the chat interface. Key scenarios:
+Automated pytest suite (91 tests) — file-tool behavior, orchestrator state machine, plan/verify/critic logic, triage:
+
+```bash
+micromamba run -n internet python -m pytest tests/ -v
+```
+
+Manual scenarios still worth exercising via the chat interface:
 - Time-sensitive queries (verify `get_current_datetime` called first)
-- File edits (verify diff + confirmation)
-- Large file handling (verify chunking logic)
+- File edits (verify diff + confirmation, stale-read refusal, near-miss hints)
+- Large file handling (verify chunking logic and `outline=true`)
 - Memory search (verify semantic retrieval)
 
 ## Known Limitations
