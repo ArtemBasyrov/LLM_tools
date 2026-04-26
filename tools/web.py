@@ -1,20 +1,29 @@
 """
 Web search and URL fetching tools.
 
-web_search — query DuckDuckGo and return top results (no API key needed)
+web_search — query the AgentSearch service (https://github.com/brcrusoe72/agent-search)
+             and return deduplicated, multi-engine results.
 fetch_url  — fetch a URL and return metadata + preview (fits_in_one_read, chunks_needed)
 read_url   — fetch a URL and return a specific chunk of its text content
+
+AgentSearch is expected to be reachable at AGENT_SEARCH_URL (default
+http://localhost:3939). Spin it up with `docker compose up -d` from a clone
+of the agent-search repo. Optional bearer auth via AGENT_SEARCH_TOKEN.
 """
 
 import json
 import math
+import os
 
 import requests
 from bs4 import BeautifulSoup
 
 from tools import register
 
-_DDGO_URL = "https://html.duckduckgo.com/html/"
+_AGENT_SEARCH_URL = os.environ.get("AGENT_SEARCH_URL", "http://localhost:3939").rstrip(
+    "/"
+)
+_AGENT_SEARCH_TOKEN = os.environ.get("AGENT_SEARCH_TOKEN", "").strip()
 _HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -22,9 +31,14 @@ _HEADERS = {
         "Chrome/124.0.0.0 Safari/537.36"
     )
 }
+if _AGENT_SEARCH_TOKEN:
+    _AUTH_HEADERS = {"Authorization": f"Bearer {_AGENT_SEARCH_TOKEN}"}
+else:
+    _AUTH_HEADERS = {}
 _WEB_MAX_CHARS = 50_000
 _WEB_DEFAULT_CHARS = 8_000  # chars returned per chunk by default
 _WEB_TIMEOUT = 15
+_SEARCH_TIMEOUT = 20
 
 
 # ---------------------------------------------------------------------------
@@ -34,8 +48,8 @@ _WEB_TIMEOUT = 15
 
 @register(
     description=(
-        "Search the web using DuckDuckGo and return the top results. "
-        "Each result contains a title, URL, and short snippet. "
+        "Search the web via the local AgentSearch service (multi-engine, deduplicated). "
+        "Each result contains a title, URL, snippet, and a list of engines it appeared on. "
         "Use this to find current information or URLs you don't already know. "
         "If you already have the URL, skip this and call fetch_url or read_url directly. "
         "Examples: "
@@ -62,36 +76,52 @@ _WEB_TIMEOUT = 15
 def web_search(query: str, max_results: int = 5) -> str:
     max_results = max(1, min(max_results, 10))
     try:
-        resp = requests.post(
-            _DDGO_URL,
-            data={"q": query, "b": "", "kl": ""},
-            headers=_HEADERS,
-            timeout=10,
+        resp = requests.get(
+            f"{_AGENT_SEARCH_URL}/search",
+            params={"q": query, "count": max_results},
+            headers=_AUTH_HEADERS,
+            timeout=_SEARCH_TIMEOUT,
         )
-        resp.raise_for_status()
     except requests.RequestException as e:
-        return json.dumps({"error": str(e)})
-
-    soup = BeautifulSoup(resp.text, "html.parser")
-    results = []
-    for result in soup.select(".result__body")[:max_results]:
-        title_tag = result.select_one(".result__title a")
-        snippet_tag = result.select_one(".result__snippet")
-        if title_tag is None:
-            continue
-        href = title_tag.get("href", "")
-        if "uddg=" in href:
-            from urllib.parse import parse_qs, urlparse
-
-            qs = parse_qs(urlparse(href).query)
-            href = qs.get("uddg", [href])[0]
-        results.append(
+        return json.dumps(
             {
-                "title": title_tag.get_text(strip=True),
-                "url": href,
-                "snippet": snippet_tag.get_text(strip=True) if snippet_tag else "",
+                "error": (
+                    f"AgentSearch unreachable at {_AGENT_SEARCH_URL}: {e}. "
+                    "Start it with `docker compose up -d` from the agent-search repo, "
+                    "or set AGENT_SEARCH_URL to point at a running instance."
+                )
             }
         )
+
+    if resp.status_code == 429:
+        return json.dumps(
+            {
+                "error": "AgentSearch rate-limited (HTTP 429). Slow down or raise RATE_LIMIT in agent-search."
+            }
+        )
+    if resp.status_code >= 400:
+        return json.dumps(
+            {"error": f"AgentSearch HTTP {resp.status_code}: {resp.text[:300]}"}
+        )
+
+    try:
+        payload = resp.json()
+    except ValueError:
+        return json.dumps(
+            {"error": f"AgentSearch returned non-JSON: {resp.text[:300]}"}
+        )
+
+    raw = payload.get("results") or []
+    results = [
+        {
+            "title": r.get("title", ""),
+            "url": r.get("url", ""),
+            "snippet": r.get("snippet", "") or r.get("content", ""),
+            "engines": r.get("engines", []),
+            "score": r.get("score"),
+        }
+        for r in raw[:max_results]
+    ]
 
     if not results:
         return json.dumps({"error": "No results found."})
