@@ -67,3 +67,4 @@ bench*
 .mcp.json
 .opencode.json
 .windsurfrules
+.bench_mlx_logs/

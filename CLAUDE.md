@@ -264,6 +264,7 @@ When `AGENTIC_MODE=true` (default), each turn runs through the
 | `ENFORCE_PLANNING` | `true` | Block final answer while plan incomplete |
 | `CRITIC_MAX_ROUNDS` | `2` | Max critic revise rounds per final response |
 | `LLM_PLAN_DIR` | `~/.llm_plans` | Where plan JSON lives |
+| `CONSTRAIN_THINK` | `true` | Constrain `<think>` to GOAL/APPROACH/EDGE (3 lines); ~92% fewer thinking tokens, ~91% lower TTFC. Set `false` for unconstrained reasoning. |
 
 ### Tests
 

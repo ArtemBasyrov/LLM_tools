@@ -111,6 +111,45 @@ def _load_memories() -> str:
 
 _SESSION_START = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+# ---------------------------------------------------------------------------
+# Structured-think grammar fragment
+#
+# BNF:
+#   root  ::= think code
+#   think ::= "<think>\n" "GOAL: " line "APPROACH: " line "EDGE: " line "</think>\n\n"
+#   line  ::= [^\n]+ "\n"
+#   code  ::= [\x09\x0A\x0D\x20-\x7E]+
+#
+# Enabled when CONSTRAIN_THINK env var is "true" (default) or "1".
+# Disable with CONSTRAIN_THINK=false to measure baseline performance.
+# ---------------------------------------------------------------------------
+
+THINK_GRAMMAR_FRAGMENT = """\
+
+## Reasoning Structure
+
+Your <think> block MUST contain exactly three lines and nothing else:
+
+<think>
+GOAL: <one-line statement of what the task requires you to accomplish>
+APPROACH: <one-line description of the method or strategy you will use>
+EDGE: <one-line identification of the key risk, constraint, or edge case>
+</think>
+
+Rules:
+- Exactly three lines — GOAL, APPROACH, EDGE — each on its own line.
+- No sub-bullets, no intermediate calculations, no elaboration inside the block.
+- Each line must start with its keyword and a colon.
+- The response follows immediately after </think> with no blank line between them.
+"""
+
+_constrain_think = os.environ.get("CONSTRAIN_THINK", "true").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
 SYSTEM_PROMPT = f"""\
 ## Role
 
@@ -242,3 +281,7 @@ SYSTEM_PROMPT += _load_memories()
 
 # If a prior-session plan is still active, surface it so the model resumes cleanly
 SYSTEM_PROMPT += _load_active_plan()
+
+# Structured-think grammar (disable with CONSTRAIN_THINK=false)
+if _constrain_think:
+    SYSTEM_PROMPT += THINK_GRAMMAR_FRAGMENT

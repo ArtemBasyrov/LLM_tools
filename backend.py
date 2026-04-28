@@ -21,6 +21,9 @@ from typing import Any, Iterator
 import httpx
 
 _BACKEND = os.environ.get("LLM_BACKEND", "llama_server").strip().lower()
+# `mlx` shares the OpenAI-HTTP path with `llama_server`; treat as the same here.
+if _BACKEND == "mlx":
+    _BACKEND = "llama_server"
 _LLAMA_URL = os.environ.get("LLAMA_SERVER_URL", "http://127.0.0.1:8081").rstrip("/")
 
 
@@ -244,10 +247,12 @@ def _llama_chat_stream(
             delta = ch.get("delta") or {}
 
             # llama-server with --jinja emits thinking in a separate
-            # `reasoning_content` field (Qwen3 chat template support).
-            # Older / template-less paths inline <think>…</think> in content,
-            # so we still run the splitter as a fallback.
-            reasoning_piece = delta.get("reasoning_content") or ""
+            # `reasoning_content` field; mlx-lm uses `reasoning`. Older /
+            # template-less paths inline <think>…</think> in content, so we
+            # still run the splitter as a fallback.
+            reasoning_piece = (
+                delta.get("reasoning_content") or delta.get("reasoning") or ""
+            )
             if reasoning_piece:
                 yield _ns(
                     {
@@ -354,7 +359,7 @@ def _llama_chat_oneshot(*, model: str, messages: list[dict], tools, options) -> 
     choice = (obj.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     content = msg.get("content") or ""
-    reasoning = msg.get("reasoning_content") or ""
+    reasoning = msg.get("reasoning_content") or msg.get("reasoning") or ""
 
     # llama-server with --jinja already separates reasoning from content.
     # Fallback: also run the splitter on `content` for inline <think> tags.

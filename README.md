@@ -168,6 +168,7 @@ cp .env.example .env
 | `AGENTIC_MODE` | `true` | Wrap each turn in the orchestrator state machine |
 | `ENFORCE_PLANNING` | `true` | Block final answer while an active plan has unverified steps |
 | `CRITIC_MAX_ROUNDS` | `2` | Max critic revise rounds per final response (0 disables) |
+| `CONSTRAIN_THINK` | `true` | Constrain `<think>` block to GOAL/APPROACH/EDGE (3 lines). Cuts thinking tokens by ~92% and time-to-first-response by ~91%. Set to `false` to revert to unconstrained reasoning. |
 
 The system supports models with 32K+ context windows.
 

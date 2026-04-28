@@ -9,6 +9,10 @@ import time
 import shutil
 import textwrap
 
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import ANSI
+from prompt_toolkit.key_binding import KeyBindings
+
 
 # Load environment variables
 def _load_dotenv(path: str = ".env") -> None:
@@ -69,6 +73,23 @@ from agent.orchestrator import Orchestrator
 from agent import modes as _modes
 
 
+def _make_input_session() -> PromptSession:
+    kb = KeyBindings()
+
+    @kb.add("enter")
+    def _(event):
+        event.current_buffer.validate_and_handle()
+
+    @kb.add("shift+enter")
+    def _(event):
+        event.current_buffer.insert_text("\n")
+
+    return PromptSession(multiline=True, key_bindings=kb)
+
+
+_input_session = _make_input_session()
+
+
 def chat() -> None:
     # Initialize session
     tools.session._clear_session_file()
@@ -91,7 +112,7 @@ def chat() -> None:
     while True:
         try:
             prompt = f"{STYLE_USER}You:{_RESET} "
-            user_input = input(prompt).strip()
+            user_input = _input_session.prompt(ANSI(prompt)).strip()
         except (EOFError, KeyboardInterrupt):
             print(f"\n{STYLE_STATS}Bye.{_RESET}")
             offload()
