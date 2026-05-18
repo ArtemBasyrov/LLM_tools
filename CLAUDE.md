@@ -4,9 +4,29 @@ This project builds tools for a locally running LLM to use via function/tool cal
 
 ## Target Model
 
-- **Model**: configured via `OLLAMA_MODEL` env var (default: `qwen3.5:35b`, running locally via [Ollama](https://ollama.com))
-- **Interface**: Ollama API, host configured via `OLLAMA_HOST` env var (default: `http://localhost:11434`)
-- **Config**: copy `.env.example` → `.env` to set model and host
+- **Model**: `Qwen3.6-27B-UD-IQ3_XXS` (unsloth GGUF, 12 GB, `~/llama_models/Qwen3.6-27B-UD-IQ3_XXS.gguf`)
+  - Selected by `bench/` quantization comparison — see `bench/report.md`. Tied
+    98% accuracy with Q4_K_M on the 50-prompt eval, ~3% faster tg, 4 GB smaller.
+  - `Q4_K_M` (16 GB) is kept on disk as a fallback (`MAIN_GGUF` env var to override).
+- **Interface**: ik_llama.cpp `llama-server` (not Ollama), host configured via `LLAMA_SERVER_URL` in `.env`
+- **Starting the server**: `./run_llama_server.sh` — this is the default way to run the model.
+  Config knobs (`CTX`, `PORT`, `SPEC`, `MAIN_GGUF`, etc.) can be overridden via `.env` or env vars.
+- **Config**: copy `.env.example` → `.env`
+
+### Inference speed (M4 Pro, Apple Silicon, CTX=8192, ngram-mod warm)
+
+Measured by `bench/run_speed.py` (cache-busted, median of 5 runs after 3-run warmup).
+The full speed table for all evaluated quantizations is in `bench/report.md`.
+
+| Model | Variant | pp (tok/s) | tg (tok/s) | Size GB |
+|-------|---------|-----------|-----------|---------|
+| Qwen3.6-27B (dense) | **UD-IQ3_XXS** (default) | **110.2** | **44.5** | 12.0 |
+| Qwen3.6-27B (dense) | Q4_K_M (fallback) | 106.8 | 43.2 | 16.0 |
+| Qwen3.6-35B-A3B-UD (MoE) | Q4_K_M, ngram-mod | 543.7 | 86.3 | 21.1 |
+
+Earlier benchmarks recorded much lower tg for Q4_K_M (e.g. 29 tok/s) because
+cache-reuse compressed prompt-eval; the 43.2 figure here is the real warm-tg
+under cache-bust conditions and matches steady-state production.
 
 ## Project Goal
 

@@ -26,9 +26,10 @@ fi
 LLAMA_BIN="${LLAMA_BIN:-$HOME/llama_cpp/build/bin/llama-server}"
 MODELS="${MODELS:-$HOME/llama_models}"
 
-# Main: unsloth Qwen3.6-27B Q4_K_M (16 GB) — must be the unsloth release;
-# the Ollama-shipped qwen3.6:27b blob has incompatible tensor naming.
-MAIN_GGUF="${MAIN_GGUF:-$MODELS/Qwen3.6-27B-Q4_K_M.gguf}"
+# Main: unsloth Qwen3.6-27B UD-IQ3_XXS (12 GB) — winner of the bench/ comparison
+# (see bench/report.md): tied 98% accuracy with Q4_K_M, ~3% faster tg, 4 GB smaller.
+# Q4_K_M (16 GB) is kept on disk as a fallback — set MAIN_GGUF in .env to override.
+MAIN_GGUF="${MAIN_GGUF:-$MODELS/Qwen3.6-27B-UD-IQ3_XXS.gguf}"
 # Draft: unsloth Qwen3.5-0.8B Q4_K_M (~500 MB).
 # NOTE: speculative decoding is *disabled* by default below — measured 10.17 tok/s
 # vs 12.03 tok/s baseline on M4 Pro, even with 100% draft acceptance. On Apple
@@ -41,11 +42,12 @@ CTX="${CTX:-32768}"
 PORT="${PORT:-8081}"
 
 # SPEC: speculative-decoding strategy with no draft model.
-#   ""         (default) — no speculation
+#   ""         — no speculation
 #   "default"  — --spec-default preset (ngram-mod, n=24, draft 48..64). PR #19164.
-#   "ngram-mod","ngram-cache","ngram-simple","ngram-map-k","ngram-map-k4v"
+#   "ngram-mod" (default) — best measured strategy; 29 tok/s vs 12 tok/s baseline on 27B.
+#   "ngram-cache","ngram-simple","ngram-map-k","ngram-map-k4v"
 #              — passed through as --spec-type <value>
-SPEC="${SPEC:-}"
+SPEC="${SPEC:-ngram-mod}"
 SPEC_ARGS=()
 case "$SPEC" in
   "")            ;;

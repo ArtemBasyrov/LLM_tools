@@ -195,7 +195,7 @@ class _ThinkSplitter:
 
 
 def _llama_chat_stream(
-    *, model: str, messages: list[dict], tools, options
+    *, model: str, messages: list[dict], tools, options, think: bool = True
 ) -> Iterator[Any]:
     """Stream chunks shaped like Ollama's stream output."""
     payload: dict[str, Any] = {
@@ -206,6 +206,8 @@ def _llama_chat_stream(
     }
     if tools:
         payload["tools"] = tools
+    if not think:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     payload.update(_options_to_openai(options))
 
     splitter = _ThinkSplitter()
@@ -342,7 +344,9 @@ def _llama_chat_stream(
     )
 
 
-def _llama_chat_oneshot(*, model: str, messages: list[dict], tools, options) -> Any:
+def _llama_chat_oneshot(
+    *, model: str, messages: list[dict], tools, options, think: bool = True
+) -> Any:
     payload: dict[str, Any] = {
         "model": model,
         "messages": _strip_assistant_extras(messages),
@@ -350,11 +354,18 @@ def _llama_chat_oneshot(*, model: str, messages: list[dict], tools, options) -> 
     }
     if tools:
         payload["tools"] = tools
+    if not think:
+        payload["chat_template_kwargs"] = {"enable_thinking": False}
     payload.update(_options_to_openai(options))
 
     timeout = httpx.Timeout(connect=5.0, read=600.0, write=30.0, pool=5.0)
     r = httpx.post(f"{_LLAMA_URL}/v1/chat/completions", json=payload, timeout=timeout)
-    r.raise_for_status()
+    if r.status_code >= 400:
+        raise httpx.HTTPStatusError(
+            f"{r.status_code} from llama-server: {r.text[:2000]}",
+            request=r.request,
+            response=r,
+        )
     obj = r.json()
     choice = (obj.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
@@ -430,7 +441,7 @@ def chat(
     model: str,
     messages: list[dict],
     tools: list[dict] | None = None,
-    think: bool = True,  # accepted for compat; thinking is split inline
+    think: bool = True,  # llama-server: passes chat_template_kwargs.enable_thinking=False when False
     stream: bool = False,
     keep_alive: Any = None,  # accepted for compat; no-op for llama-server
     options: dict | None = None,
@@ -447,10 +458,10 @@ def chat(
         )
     if stream:
         return _llama_chat_stream(
-            model=model, messages=messages, tools=tools, options=options
+            model=model, messages=messages, tools=tools, options=options, think=think
         )
     return _llama_chat_oneshot(
-        model=model, messages=messages, tools=tools, options=options
+        model=model, messages=messages, tools=tools, options=options, think=think
     )
 
 

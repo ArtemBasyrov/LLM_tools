@@ -4,13 +4,13 @@ A tool-calling interface for locally running LLMs, enabling safe, interactive ag
 
 ## Overview
 
-This project provides a suite of tools that a local LLM can invoke via function/tool calling. Built on top of [Ollama](https://ollama.com) and the [Ollama Python SDK](https://github.com/ollama/ollama-python), it supports:
+This project provides a suite of tools that a local LLM can invoke via function/tool calling. Default backend is [ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)'s `llama-server` running `Qwen3.6-27B-UD-IQ3_XXS` (12 GB GGUF) with ngram-mod speculative decoding. An MLX backend is supported on Apple Silicon; Ollama remains as a debugging fallback. All backends speak the same OpenAI-compatible HTTP API. Capabilities:
 
 - **File operations** with a generate-and-check feedback loop — line-numbered reads, near-miss hints on failed edits, atomic batch edits, mtime-based staleness guard, undo ring, and automatic syntax checks (py_compile / ruff / JSON / YAML / TOML)
 - **Code intelligence** — Python AST `go_to_definition` / `find_references`, multi-file `apply_patch`, typed `find_files`
 - **Git tools** — `git_status` / `git_diff` / `git_blame` as first-class JSON tools
 - **Test runner** — focused `pytest` invocations with capped output
-- **Web capabilities** — DuckDuckGo search, URL fetching with chunking
+- **Web capabilities** — self-hosted [AgentSearch](https://github.com/brcrusoe72/agent-search) multi-engine search, URL fetching with chunking
 - **Semantic memory** — persistent cross-session facts via LanceDB + vector search
 - **NotebookLM integration** — Google's LLM-based document analysis
 - **Agentic orchestration** — per-turn state machine with plan/verify/critic loops and a sticky `[SYSTEM FILES]` view of the current working set
@@ -21,7 +21,8 @@ This project provides a suite of tools that a local LLM can invoke via function/
 
 - **Python 3.10+**
 - **[micromamba](https://mamba.readthedocs.io/)** (recommended) or conda
-- **[Ollama](https://ollama.com)** with `qwen3.5:35b` model
+- **[ik_llama.cpp](https://github.com/ikawrakow/ik_llama.cpp)** built locally (binary expected at `~/llama_cpp/build/bin/llama-server`; override with `LLAMA_BIN`)
+- A Qwen3.6-27B GGUF in `~/llama_models/` — defaults to `Qwen3.6-27B-UD-IQ3_XXS.gguf` (override with `MAIN_GGUF`)
 
 ### Installation
 
@@ -30,29 +31,50 @@ This project provides a suite of tools that a local LLM can invoke via function/
 git clone https://github.com/yourusername/llm_tools.git
 cd llm_tools
 
-# Create and activate micromamba environment
-micromamba create -n llm_tools python=3.11 -y
-micromamba activate llm_tools
+# Create the micromamba environment used by the tools
+micromamba create -n internet python=3.11 -y
+micromamba install -n internet lancedb sentence-transformers pyarrow requests -y
 
-# Install dependencies
-micromamba install -n llm_tools ollama lancedb sentence-transformers pyarrow -y
+# Copy and edit env file
+cp .env.example .env
 
 # NotebookLM integration (optional)
 pip install notebooklm-py
 notebooklm login   # one-time Google auth
+
+# AgentSearch (optional, for web_search) — clone and let run_llama_server.sh start it
+git clone https://github.com/brcrusoe72/agent-search.git ~/agent-search
 ```
 
 ### Running
 
+Start the inference server (loads the GGUF and brings up AgentSearch if cloned):
+
 ```bash
-micromamba run -n llm_tools python main.py
+./run_llama_server.sh
 ```
 
-The model will automatically download if not present. You'll see a prompt-ready interface with:
+Then in another shell, launch the chat loop:
+
+```bash
+micromamba run -n internet python main.py
+```
+
+You'll see a prompt-ready interface with:
 - Colored tool call indicators
-- LLM "thinking" display
+- LLM "thinking" display (constrained to 3-line GOAL/APPROACH/EDGE by default)
 - Context window usage stats
 - Tool availability listing
+
+### Inference speed (M4 Pro, CTX=8192, ngram-mod warm)
+
+| Model | Variant | pp (tok/s) | tg (tok/s) | Size GB |
+|-------|---------|-----------|-----------|---------|
+| Qwen3.6-27B (dense) | **UD-IQ3_XXS** (default) | **110.2** | **44.5** | 12.0 |
+| Qwen3.6-27B (dense) | Q4_K_M (fallback) | 106.8 | 43.2 | 16.0 |
+| Qwen3.6-35B-A3B-UD (MoE) | Q4_K_M, ngram-mod | 543.7 | 86.3 | 21.1 |
+
+Full quant comparison in `bench/report.md`.
 
 ## Supported Tools
 
@@ -64,7 +86,7 @@ The model will automatically download if not present. You'll see a prompt-ready 
 | **Search & shell** | `find_files`, `bash`, `read_context_files`, `list_directory`, `make_directory`, `remove_file`, `get_working_context` | Typed glob with hidden-dir guard, shell, context-file loader |
 | **Git** | `git_status`, `git_diff`, `git_blame` | Porcelain v2 status, capped diffs, line-range blame |
 | **Tests** | `run_tests` | `pytest -x --tb=short` with output trimming |
-| **Web** | `web_search`, `fetch_url`, `read_url` | DuckDuckGo search, URL fetching with chunking |
+| **Web** | `web_search`, `fetch_url`, `read_url` | Local AgentSearch (no rate limits), URL fetching with chunking |
 | **Memory** | `memory_save`, `memory_search`, `memory_list`, `memory_delete` | Persistent semantic memory with vector embeddings |
 | **Plan / verify / session** | `plan_*`, `verify_report`, `session_save`, `session_recall`, `session_clear`, `set_mode` | Agentic plan execution, verification, snapshot/recall, mode switching |
 | **NotebookLM** | `notebooklm_create_notebook`, `notebooklm_add_source`, `notebooklm_ask`, `notebooklm_generate`, `notebooklm_list_artifacts`, `notebooklm_download` | Google NotebookLM integration via [notebooklm-py](https://github.com/teng-lin/notebooklm-py) |
@@ -120,10 +142,14 @@ Persistent memory uses **LanceDB** + **all-MiniLM-L6-v2** embeddings:
 
 ```
 llm_tools/
-├── main.py               # Main chat loop and Ollama integration
+├── main.py               # Main chat loop entrypoint
+├── backend.py            # Backend dispatcher (llama_server / mlx / ollama)
 ├── system_prompt.py      # System prompt and model configuration
 ├── rendering.py          # Display and formatting helpers
 ├── context_window.py     # Context window management + sticky-message compaction
+├── run_llama_server.sh   # Launch ik_llama.cpp llama-server (default backend)
+├── run_mlx_server.sh     # Launch mlx-lm server (Apple Silicon alternative)
+├── bench/                # Quantization + speed benchmarks (see report.md)
 ├── agent/
 │   ├── orchestrator.py   # State machine wrapping each user turn
 │   ├── plan.py / triage / verifier / critic / prompts / modes
@@ -161,8 +187,16 @@ cp .env.example .env
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `OLLAMA_MODEL` | `qwen3.5:35b` | Ollama model to use (must be pulled locally) |
-| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL |
+| `LLM_BACKEND` | `llama_server` | Inference backend: `llama_server` (ik_llama.cpp), `mlx` (mlx-lm), or `ollama` (debug fallback) |
+| `LLAMA_SERVER_URL` | `http://127.0.0.1:8081` | OpenAI-compatible URL for `llama_server` / `mlx` backends |
+| `OLLAMA_MODEL` | `qwen3.5:35b` | Ollama model name (only when `LLM_BACKEND=ollama`) |
+| `OLLAMA_HOST` | `http://localhost:11434` | Ollama server URL (only when `LLM_BACKEND=ollama`) |
+| `MAIN_GGUF` | `~/llama_models/Qwen3.6-27B-UD-IQ3_XXS.gguf` | GGUF loaded by `run_llama_server.sh` |
+| `CTX` | `32768` | Runtime context length for llama-server |
+| `PORT` | `8081` | llama-server port (must match `LLAMA_SERVER_URL`) |
+| `SPEC` | `ngram-mod` | Speculative decoding strategy: `""`, `default`, `ngram-mod`, `ngram-cache`, `ngram-simple`, `ngram-map-k`, `ngram-map-k4v` |
+| `AGENT_SEARCH_URL` | `http://localhost:3939` | AgentSearch endpoint for `web_search` |
+| `AGENT_SEARCH_AUTOSTART` | `1` | Whether `run_llama_server.sh` should bring up AgentSearch via `docker compose` |
 | `LLM_MEMORY_DIR` | `~/.llm_memory` | Custom location for semantic memory database |
 | `LLM_PLAN_DIR` | `~/.llm_plans` | Custom location for agentic plan JSON files |
 | `AGENTIC_MODE` | `true` | Wrap each turn in the orchestrator state machine |
@@ -239,16 +273,16 @@ Manual scenarios still worth exercising via the chat interface:
 
 ## Known Limitations
 
-1. **Ollama dependency** — requires local Ollama instance running
-2. **Model size** — optimized for 35B+ parameter models (smaller models may struggle with tool selection)
-3. **Network calls** — `fetch_url` requires internet access
+1. **Local inference required** — needs `./run_llama_server.sh` (or an MLX/Ollama backend) running
+2. **Model size** — tuned for 27B+ parameter models; smaller models may struggle with tool selection and the verifier/critic loop
+3. **Network calls** — `fetch_url` / `read_url` require internet; `web_search` requires the AgentSearch container running locally
 4. **NotebookLM** — requires [notebooklm-py](https://github.com/teng-lin/notebooklm-py) and a one-time `notebooklm login`; Google-specific rate limits may apply
 5. **Embedding model** — downloads `all-MiniLM-L6-v2` on first memory use (~22 MB)
 
 ## Security Considerations
 
-- No API keys are required — all tools use local resources or key-free APIs (DuckDuckGo)
-- Sensitive config (model name, host) lives in `.env`, which is gitignored
+- No API keys are required — all tools use local resources or self-hosted services
+- Sensitive config (model paths, host) lives in `.env`, which is gitignored
 - File write/delete operations require explicit user confirmation at runtime
 - The `calculate` tool only allows basic arithmetic characters
 
